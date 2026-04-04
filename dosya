@@ -1,0 +1,933 @@
+import { useState, useEffect, useRef, useReducer, useCallback } from "react";
+
+/* ═══════════════════════════════════════════════════════════════
+   AGENT OS v3 — Professional Mobile App
+   12 Agents (Phase 3) | Multi-Provider | Full Architecture
+   Files: src/core/theme.js, providers.js, agentBase.js
+          src/agents/01-04
+   ═══════════════════════════════════════════════════════════════ */
+
+// ══ INLINE: Theme ══
+const T = {
+  bg: "#060A10", s: "#0B1120", s2: "#101D33", s3: "#162040",
+  bd: "#1A2744", bdL: "#253A5C",
+  tx: "#E2E8F0", txM: "#64748B", txD: "#2D3F5E",
+  ac: "#00F0B5", dn: "#EF4444", wn: "#F59E0B", inf: "#3B82F6",
+  fn: "'IBM Plex Mono','SF Mono',monospace",
+  fd: "'Outfit','Manrope',sans-serif",
+  r: 12, rs: 8, rx: 4,
+};
+
+// ══ INLINE: Providers ══
+const PROVIDERS = {
+  anthropic: {
+    id: "anthropic", name: "Anthropic", color: "#D4A574",
+    models: [
+      { id: "claude-sonnet-4-20250514", label: "Sonnet 4" },
+      { id: "claude-opus-4-0-20250514", label: "Opus 4" },
+      { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5" },
+    ],
+    build: (k, m, sys, msgs, mt) => ({
+      url: "https://api.anthropic.com/v1/messages",
+      h: { "Content-Type": "application/json", "x-api-key": k, "anthropic-version": "2023-06-01" },
+      b: { model: m, max_tokens: mt, system: sys, messages: msgs },
+    }),
+    parse: d => ({ text: d.content?.map(b => b.text || "").join("") || "", tok: d.usage?.output_tokens || 0 }),
+    cost: 0.015,
+  },
+  groq: {
+    id: "groq", name: "Groq", color: "#F55036",
+    models: [
+      { id: "llama-3.3-70b-versatile", label: "Llama 3.3 70B" },
+      { id: "llama-3.1-8b-instant", label: "Llama 3.1 8B" },
+      { id: "mixtral-8x7b-32768", label: "Mixtral 8x7B" },
+    ],
+    build: (k, m, sys, msgs, mt) => ({
+      url: "https://api.groq.com/openai/v1/chat/completions",
+      h: { "Content-Type": "application/json", Authorization: `Bearer ${k}` },
+      b: { model: m, max_tokens: mt, messages: [{ role: "system", content: sys }, ...msgs] },
+    }),
+    parse: d => ({ text: d.choices?.[0]?.message?.content || "", tok: d.usage?.completion_tokens || 0 }),
+    cost: 0.00079,
+  },
+  gemini: {
+    id: "gemini", name: "Gemini", color: "#4285F4",
+    models: [
+      { id: "gemini-2.0-flash", label: "2.0 Flash" },
+      { id: "gemini-2.5-pro-preview-06-05", label: "2.5 Pro" },
+    ],
+    build: (k, m, sys, msgs, mt) => ({
+      url: `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${k}`,
+      h: { "Content-Type": "application/json" },
+      b: { system_instruction: { parts: [{ text: sys }] }, contents: msgs.map(x => ({ role: x.role === "assistant" ? "model" : "user", parts: [{ text: x.content }] })), generationConfig: { maxOutputTokens: mt } },
+    }),
+    parse: d => ({ text: d.candidates?.[0]?.content?.parts?.map(p => p.text).join("") || "", tok: d.usageMetadata?.candidatesTokenCount || 0 }),
+    cost: 0.0004,
+  },
+  openrouter: {
+    id: "openrouter", name: "OpenRouter", color: "#6366F1",
+    models: [
+      { id: "anthropic/claude-sonnet-4", label: "Claude Sonnet 4" },
+      { id: "openai/gpt-4o", label: "GPT-4o" },
+      { id: "google/gemini-2.0-flash-001", label: "Gemini Flash" },
+      { id: "meta-llama/llama-3.3-70b-instruct", label: "Llama 3.3" },
+      { id: "deepseek/deepseek-chat-v3-0324", label: "DeepSeek V3" },
+    ],
+    build: (k, m, sys, msgs, mt) => ({
+      url: "https://openrouter.ai/api/v1/chat/completions",
+      h: { "Content-Type": "application/json", Authorization: `Bearer ${k}` },
+      b: { model: m, max_tokens: mt, messages: [{ role: "system", content: sys }, ...msgs] },
+    }),
+    parse: d => ({ text: d.choices?.[0]?.message?.content || "", tok: d.usage?.completion_tokens || 0 }),
+    cost: 0.015,
+  },
+};
+
+// ══ INLINE: 12 Agents (Phase 3) — All Layers Active ══
+const AGENTS_FULL = [
+  {
+    id: "architect_agent", name: "Architect", icon: "\u2B21", color: "#F0ABFC",
+    layer: 11, layerName: "Mimari", category: "architecture",
+    role: "System architecture design & pattern selection",
+    desc: "Selects architecture style, defines component boundaries, data flow patterns, makes trade-off decisions.",
+    skills: ["layeredArch","cleanArch","hexagonalArch","microservices","modularMonolith","eventDriven","cqrs","serverless","ddd","apiDesign","dataModeling","scalability"],
+    hooks: ["useArchDecision","usePatternSelect","useTradeoffAnalysis","useBoundedContext","useComponentDiagram","useDataFlowDesign","useScalabilityPlan","useTechStackDecision"],
+    tools: ["diagram_generator","pattern_catalog","tech_radar","load_estimator"],
+    outputTo: ["ui_agent","mobile_agent","auth_agent"],
+    inputFrom: [],
+    temp: 0.2, maxTok: 2048, format: "json",
+    sys: `You are the Architect Agent. Design system architecture.\nReturn ONLY valid JSON:\n{"archStyle":"...","components":[{"name":"...","type":"...","responsibility":"...","technology":"..."}],"dataFlow":[{"from":"...","to":"...","protocol":"..."}],"decisions":[{"decision":"...","rationale":"...","tradeoffs":"..."}]}\nNo markdown. No explanations.`,
+  },
+  {
+    id: "ui_agent", name: "UI Agent", icon: "\u25A3", color: "#06D6A0",
+    layer: 0, layerName: "Urun/Kanal", category: "frontend",
+    role: "Frontend UI generation & component architecture",
+    desc: "Generates production-ready UI code, component hierarchy, responsive layouts, design system integration.",
+    skills: ["react","vue","html5","css3","tailwind","responsiveDesign","atomicDesign","componentArch","designSystem","microInteractions","cssAnimations","darkMode","mobileFirst","svgGen"],
+    hooks: ["useComponentGen","useStyleEngine","useLayoutSolver","useResponsiveBreak","useDesignTokens","useA11yAnnotate","useAnimationPlan","useIconResolver"],
+    tools: ["screenshot_compare","lighthouse_audit","color_contrast","responsive_preview"],
+    outputTo: ["reviewer_agent","a11y_agent","tester_agent"],
+    inputFrom: ["architect_agent","theme_agent"],
+    temp: 0.4, maxTok: 2048, format: "code",
+    sys: `You are the UI Agent. Generate production-ready frontend code.\nMobile-first. Semantic HTML. ARIA attributes. CSS custom properties.\nReturn ONLY code. Use "// --- FILE: name ---" markers for multiple files.\nNo explanations. No markdown fences.`,
+  },
+  {
+    id: "mobile_agent", name: "Mobile Agent", icon: "\u25B3", color: "#2DD4BF",
+    layer: 0, layerName: "Urun/Kanal", category: "frontend",
+    role: "Mobile-specific UI & native platform integration",
+    desc: "Handles touch interactions, platform-specific patterns, offline-first, push notifications, deep linking, gestures.",
+    skills: ["reactNative","flutter","swiftUI","jetpackCompose","offlineFirst","pushNotifications","deepLinking","gestureNav","hapticFeedback","biometricAuth","backgroundSync","cameraIntegration"],
+    hooks: ["usePlatformDetect","useGesture","useOfflineSync","useDeepLink","usePushToken","useBiometric","useHaptic","useKeyboardAvoid","useSafeArea","useAppState","usePermission"],
+    tools: ["device_simulator","network_throttle","memory_profiler","gesture_recorder"],
+    outputTo: ["reviewer_agent","tester_agent"],
+    inputFrom: ["ui_agent","architect_agent"],
+    temp: 0.3, maxTok: 2048, format: "code",
+    sys: `You are the Mobile Agent. Generate mobile-optimized code.\nTouch targets >=44pt. Safe area insets. Offline-first. 60fps animations.\nReturn ONLY code. Use "// --- PLATFORM: ios|android|shared ---" markers.\nNo explanations.`,
+  },
+  {
+    id: "auth_agent", name: "Auth Agent", icon: "\u2B22", color: "#F472B6",
+    layer: 2, layerName: "Edge/Giris", category: "security",
+    role: "Authentication & authorization architecture",
+    desc: "Complete auth systems: JWT, OAuth2, RBAC, MFA, session management, security hardening.",
+    skills: ["jwt","oauth2","openidConnect","rbac","abac","mfa_totp","mfa_webauthn","passwordHashing","tokenRefresh","socialLogin","sso","csrfProtection","bruteForceProtection","auditAuthEvents"],
+    hooks: ["useAuthFlow","useTokenRefresh","usePermission","useSessionManager","useMFA","useOAuth","useSocialAuth","usePasswordPolicy","useBruteForceGuard","useTokenBlacklist","useCSRF"],
+    tools: ["jwt_debugger","oauth_tester","password_auditor","vulnerability_scan"],
+    outputTo: ["validator_agent","audit_agent","tester_agent"],
+    inputFrom: ["architect_agent","policy_agent"],
+    temp: 0.1, maxTok: 2048, format: "json",
+    sys: `You are the Auth Agent. Design authentication/authorization.\nReturn ONLY valid JSON:\n{"authFlow":{"type":"jwt","tokenLifetime":"15m","mfaEnabled":true},"endpoints":[{"method":"POST","path":"/auth/login","rateLimit":"5/min"}],"roles":[{"name":"admin","permissions":[]}],"securityRules":[{"rule":"...","implementation":"..."}]}\nNEVER plaintext passwords. ALWAYS bcrypt/argon2. JWT short-lived.\nNo markdown.`,
+  },
+  {
+    id: "entity_agent", name: "Entity Agent", icon: "\u2B23", color: "#34D399",
+    layer: 4, layerName: "Domain", category: "domain",
+    role: "Domain entity design & aggregate modeling",
+    desc: "DDD entities, value objects, aggregates, state machines, invariants. Designs consistency boundaries and entity lifecycle.",
+    skills: ["entityIdentity","valueObject","aggregateRoot","aggregateBoundary","stateTransition","stateMachine","domainInvariant","factoryPattern","repositoryInterface","domainEvent","specification","immutability","equalitySemantics","validation","serialization","encapsulation"],
+    hooks: ["useEntityFactory","useValueObject","useAggregate","useStateMachine","useInvariant","useDomainEvent","useSpecification","useIdentity","useAuditFields","useOptimisticLock","useSoftDelete","useSnapshot"],
+    tools: ["er_diagram","state_diagram","invariant_checker","aggregate_sizer"],
+    outputTo: ["domain_svc_agent","repo_agent","event_agent"],
+    inputFrom: ["architect_agent"],
+    temp: 0.2, maxTok: 2048, format: "json",
+    sys: `You are the Entity Agent. Design domain entities following DDD.\nReturn ONLY valid JSON:\n{"entities":[{"name":"...","type":"aggregateRoot","identity":{"field":"id","type":"UUID"},"fields":[{"name":"...","type":"...","required":true}],"invariants":["..."],"states":{"values":["..."],"transitions":[{"from":"...","to":"...","trigger":"...","guard":"..."}]},"events":["..."],"methods":[{"name":"...","validates":"..."}]}],"valueObjects":[{"name":"...","fields":[],"equality":"..."}],"aggregateBoundaries":[{"root":"...","members":[],"rule":"..."}]}\nNo prose. No markdown.`,
+  },
+  {
+    id: "usecase_agent", name: "UseCase Agent", icon: "\u25B6", color: "#F59E0B",
+    layer: 3, layerName: "Uygulama", category: "application",
+    role: "Use case orchestration & application workflows",
+    desc: "Application use cases, CRUD flows, command/query handlers, transaction boundaries, DTO mapping, authorization checks.",
+    skills: ["crudOrchestration","commandHandler","queryHandler","workflowStep","transactionScope","inputValidation","outputMapping","authorizationCheck","idempotencyKey","retryPolicy","compensatingAction","bulkOperation","pagination","filtering","sorting","eventPublishing"],
+    hooks: ["useUseCaseRunner","useCRUD","useCommandBus","useQueryBus","useTransaction","useIdempotency","useAuthorize","useValidateInput","useMapOutput","usePaginate","useAuditAction","useBulkAction"],
+    tools: ["usecase_diagram","sequence_diagram","api_spec_gen","test_case_gen"],
+    outputTo: ["auth_agent","validator_agent","tester_agent"],
+    inputFrom: ["architect_agent","entity_agent"],
+    temp: 0.2, maxTok: 2048, format: "json",
+    sys: `You are the UseCase Agent. Design application use cases.\nReturn ONLY valid JSON:\n{"useCases":[{"name":"...","type":"command","actor":"...","input":{"dto":"...","fields":[],"authorization":"..."},"steps":[{"step":1,"action":"...","handler":"...","rollback":"..."}],"output":{"dto":"...","fields":[]},"errors":[{"code":"...","http":400,"message":"..."}],"idempotent":true,"transactional":true}],"queries":[{"name":"...","authorization":"...","input":{},"output":"...","cacheable":true}]}\nNo prose. No markdown.`,
+  },
+  {
+    id: "repo_agent", name: "Repository", icon: "\u25A2", color: "#38BDF8",
+    layer: 5, layerName: "Veri Erisim", category: "data",
+    role: "Data access layer design & query optimization",
+    desc: "Repository pattern, query builders, caching strategies, database migrations, index optimization, bulk operations.",
+    skills: ["repositoryPattern","readRepository","writeRepository","queryBuilder","dynamicFilter","indexStrategy","cacheReadThrough","cacheWriteThrough","cacheInvalidation","migration","seedData","softDelete","optimisticLocking","bulkInsert","cursorPagination","fullTextSearch","joinOptimization","cacheTTL"],
+    hooks: ["useRepository","useQueryBuilder","usePagination","useCache","useCacheInvalidate","useMigration","useSeed","useTransaction","useBulkOp","useSearchIndex","useVersioning","useAuditLog"],
+    tools: ["query_analyzer","index_advisor","migration_diff","data_generator"],
+    outputTo: ["cache_agent","db_agent","tester_agent"],
+    inputFrom: ["entity_agent","architect_agent"],
+    temp: 0.15, maxTok: 2048, format: "json",
+    sys: `You are the Repository Agent. Design data access layer.\nReturn ONLY valid JSON:\n{"repositories":[{"name":"...","entity":"...","type":"read-write","methods":[{"name":"...","query":"...","cache":{"key":"...","ttl":"5m"},"pagination":"cursor"}]}],"indexes":[{"table":"...","columns":[],"type":"btree","rationale":"..."}],"cacheStrategy":{"provider":"redis","defaultTTL":"10m","invalidationPattern":"event-driven"},"migrations":[{"version":"001","description":"...","up":"...","down":"..."}]}\nNo prose. No markdown.`,
+  },
+  {
+    id: "logger_agent", name: "Logger Agent", icon: "\u25B8", color: "#A3E635",
+    layer: 8, layerName: "Kesisen", category: "observability",
+    role: "Structured logging & observability infrastructure",
+    desc: "JSON structured logging, correlation IDs, log transport, PII masking, alert triggers, performance logging.",
+    skills: ["structuredLogging","jsonFormat","correlationId","requestTracing","logLevels","logRotation","logAggregation","elkStack","datadog","sensitiveDataMask","performanceLogging","errorTracking","auditLogging","sampledLogging","cloudwatch","debugContext"],
+    hooks: ["useLogger","useCorrelation","useRequestLog","useErrorLog","usePerfLog","useAuditLog","useMask","useLogTransport","useLogLevel","useSampler","useContextEnrich","useAlertTrigger"],
+    tools: ["log_analyzer","log_query","alert_config","pii_scanner"],
+    outputTo: ["monitor_agent","audit_agent"],
+    inputFrom: ["architect_agent"],
+    temp: 0.15, maxTok: 1536, format: "json",
+    sys: `You are the Logger Agent. Design structured logging.\nReturn ONLY valid JSON:\n{"config":{"format":"json","defaultLevel":"info","levels":{"production":"warn","development":"debug"},"transports":[{"type":"console","env":["dev"]},{"type":"elasticsearch","index":"logs-{date}"}],"correlation":{"headerName":"X-Correlation-ID","propagate":true}},"schemas":[{"event":"http.request","fields":{"method":"string","path":"string","statusCode":"number","durationMs":"number"}}],"masking":{"fields":["password","token","ssn"],"strategy":"redact"},"alerts":[{"condition":"error rate > 5%","severity":"critical"}]}\nNEVER log passwords/tokens/PII. No prose.`,
+  },
+  {
+    id: "tester_agent", name: "Tester Agent", icon: "\u25C9", color: "#E879F9",
+    layer: 9, layerName: "Operasyon", category: "quality",
+    role: "Test generation & coverage analysis",
+    desc: "Unit/integration/E2E/contract tests, mutation testing, edge case discovery, coverage analysis, mock factories.",
+    skills: ["unitTest","integrationTest","e2eTest","contractTest","mutationTest","edgeCaseFinding","testFixture","mockFactory","assertionDesign","coverageAnalysis","snapshotTest","performanceTest","securityTest","fuzzTest","propertyBasedTest","regressionTest"],
+    hooks: ["useTestRunner","useCoverage","useMutationTest","useMockFactory","useFixture","useSnapshot","useE2ESetup","useContractVerify","usePerformanceBench","useFuzzer","usePropertyTest","useTestReport"],
+    tools: ["coverage_report","mutation_score","test_generator","flaky_detector","visual_regression"],
+    inputFrom: ["usecase_agent","entity_agent","ui_agent"], outputTo: ["cicd_agent","reviewer_agent"],
+    temp: 0.2, maxTok: 2048, format: "json",
+    sys: `You are the Tester Agent. Generate comprehensive tests.\nReturn ONLY valid JSON:\n{"suites":[{"name":"...","type":"unit|integration|e2e","tests":[{"name":"...","arrange":"...","act":"...","assert":"..."}]}],"coverage":{"target":"80%"},"mocks":[]}\nCover happy + error + edge. No prose.`,
+  },
+  {
+    id: "notification_agent", name: "Notification", icon: "\u25C6", color: "#FB923C",
+    layer: 6, layerName: "Entegrasyon", category: "integration",
+    role: "Multi-channel notification dispatch & templates",
+    desc: "Email, SMS, push, in-app. Template engine, channel routing, delivery tracking, retry, rate limiting, preferences.",
+    skills: ["emailSend","smsSend","pushNotification","inAppNotification","templateEngine","channelRouting","deliveryTracking","retryPolicy","rateLimiting","batchSend","scheduling","personalization","unsubscribe","bounceHandling","webhookNotify","preferenceManagement"],
+    hooks: ["useNotifDispatch","useTemplate","useChannelRoute","useDeliveryTrack","useRetryQueue","useRateLimit","useBatchSender","useScheduler","usePersonalize","usePreferences","useBounceHandler","useUnsubscribe"],
+    tools: ["email_preview","sms_simulator","push_tester","delivery_dashboard","template_editor"],
+    inputFrom: ["usecase_agent","scheduler_agent"], outputTo: ["logger_agent","audit_agent"],
+    temp: 0.2, maxTok: 1536, format: "json",
+    sys: `You are the Notification Agent. Design multi-channel notifications.\nReturn ONLY valid JSON:\n{"channels":[],"templates":[],"routing":[],"preferences":{"optOut":true},"retry":{"maxAttempts":3}}\nNo prose.`,
+  },
+  {
+    id: "eventbus_agent", name: "EventBus Agent", icon: "\u25CE", color: "#F97316",
+    layer: 6, layerName: "Entegrasyon", category: "integration",
+    role: "Event bus & pub/sub messaging architecture",
+    desc: "Event-driven communication, pub/sub, message queues, dead letter, event sourcing, saga coordination.",
+    skills: ["publishSubscribe","eventRouting","topicManagement","messageQueue","deadLetterQueue","eventSourcing","sagaCoordination","eventSchema","eventVersioning","fanout","filtering","ordering","deduplication","partitioning","backpressure","replayability"],
+    hooks: ["useEventBus","usePublish","useSubscribe","useTopic","useDeadLetter","useEventStore","useSagaCoordinator","useEventSchema","useEventVersion","useFanout","useFilter","useReplay","useDedup","usePartition"],
+    tools: ["event_visualizer","topic_inspector","dlq_monitor","schema_registry","event_replay"],
+    inputFrom: ["entity_agent","usecase_agent"], outputTo: ["notification_agent","logger_agent"],
+    temp: 0.15, maxTok: 1536, format: "json",
+    sys: `You are the EventBus Agent. Design event-driven messaging.\nReturn ONLY valid JSON:\n{"events":[],"topics":[],"deadLetter":{"enabled":true},"patterns":{"delivery":"at-least-once"}}\nNo prose.`,
+  },
+  {
+    id: "database_agent", name: "Database Agent", icon: "\u25A1", color: "#FB7185",
+    layer: 7, layerName: "Altyapi", category: "infrastructure",
+    role: "Database provisioning, schema design & optimization",
+    desc: "SQL/NoSQL, schema design, indexing, partitioning, replication, backup, connection pooling, query optimization.",
+    skills: ["postgres","mysql","mongodb","dynamodb","redis","graphDB","timeseriesDB","schemaDesign","normalization","denormalization","indexing","partitioning","sharding","replication","backup","connectionPool","queryOptimization","dataRetention","encryption","audit"],
+    hooks: ["useDBProvisioner","useSchemaDesign","useIndexOptimizer","useQueryAnalyzer","usePartitionStrategy","useReplicationConfig","useBackupSchedule","useConnectionPool","useRetentionPolicy","useEncryptionAtRest","useAuditTrigger","useReadReplica"],
+    tools: ["query_explain","index_advisor","schema_visualizer","load_tester","backup_verifier","migration_planner"],
+    inputFrom: ["architect_agent","entity_agent","repo_agent"], outputTo: ["logger_agent","monitor_agent"],
+    temp: 0.15, maxTok: 2048, format: "json",
+    sys: `You are the Database Agent. Design database infrastructure.\nReturn ONLY valid JSON:\n{"engine":{"primary":"postgres","cache":"redis"},"schemas":[],"config":{"poolSize":20,"replication":{},"backup":{"schedule":"daily"}},"optimization":{}}\nNo prose.`,
+  },
+];
+
+const AGENTS = Object.fromEntries(AGENTS_FULL.map(a => [a.id, a]));
+
+// ══ HELPERS ══
+let _u = 0;
+const gid = () => `${Date.now()}-${++_u}`;
+const ts = () => { const d = new Date(); return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`; };
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// ══ REDUCER ══
+const init = {
+  status: "idle",
+  keys: { anthropic: "", groq: "", gemini: "", openrouter: "" },
+  provider: "anthropic",
+  model: "claude-sonnet-4-20250514",
+  agents: Object.fromEntries(AGENTS_FULL.map(a => [a.id, { status: "idle", tokens: 0, elapsed: 0, cost: 0, output: "", error: null, retries: 0 }])),
+  logs: [],
+  bus: [],
+  metrics: { totalTok: 0, totalMs: 0, totalCost: 0, perAgent: {} },
+  streams: {},
+};
+
+function red(st, a) {
+  switch (a.t) {
+    case "KEY": return { ...st, keys: { ...st.keys, [a.p]: a.v } };
+    case "PROV": return { ...st, provider: a.v, model: PROVIDERS[a.v].models[0].id };
+    case "MOD": return { ...st, model: a.v };
+    case "ST": return { ...st, status: a.v };
+    case "AG": { const ag = { ...st.agents }; ag[a.id] = { ...ag[a.id], ...a.d }; return { ...st, agents: ag }; }
+    case "LOG": return { ...st, logs: [...st.logs, { id: gid(), time: ts(), from: a.from, type: a.lt, text: a.text }] };
+    case "BUS": return { ...st, bus: [...st.bus, { id: gid(), time: ts(), from: a.from, to: a.to, text: a.text }] };
+    case "STR": { const s = { ...st.streams }; s[a.id] = a.text; return { ...st, streams: s }; }
+    case "MET": {
+      const p = { ...st.metrics.perAgent }; p[a.id] = (p[a.id] || 0) + a.tok;
+      return { ...st, metrics: { totalTok: st.metrics.totalTok + a.tok, totalMs: st.metrics.totalMs + a.ms, totalCost: st.metrics.totalCost + a.cost, perAgent: p } };
+    }
+    case "RST": return { ...init, keys: st.keys, provider: st.provider, model: st.model };
+    default: return st;
+  }
+}
+
+// ══ API CALL ══
+async function callLLM(st, dispatch, agentId, sysPrompt, userMsg, maxTok) {
+  const prov = PROVIDERS[st.provider];
+  const key = st.keys[st.provider];
+  if (!key) throw new Error(`No API key for ${prov.name}`);
+
+  dispatch({ t: "LOG", from: agentId, lt: "info", text: `${prov.name} / ${st.model}` });
+  const t0 = Date.now();
+  const req = prov.build(key, st.model, sysPrompt, [{ role: "user", content: userMsg }], maxTok || 1024);
+
+  const res = await fetch(req.url, { method: "POST", headers: req.h, body: JSON.stringify(req.b) });
+  if (!res.ok) { const e = await res.text(); throw new Error(`${res.status}: ${e.slice(0, 100)}`); }
+
+  const data = await res.json();
+  const parsed = prov.parse(data);
+  const ms = Date.now() - t0;
+  const cost = (parsed.tok / 1000) * prov.cost;
+
+  // Stream simulation
+  const chars = parsed.text.split("");
+  let buf = "";
+  const ch = Math.max(2, Math.floor(chars.length / 25));
+  for (let i = 0; i < chars.length; i += ch) {
+    buf += chars.slice(i, i + ch).join("");
+    dispatch({ t: "STR", id: agentId, text: buf });
+    await sleep(18);
+  }
+  dispatch({ t: "STR", id: agentId, text: parsed.text });
+  dispatch({ t: "MET", id: agentId, tok: parsed.tok, ms, cost });
+  dispatch({ t: "LOG", from: agentId, lt: "success", text: `${ms}ms | ${parsed.tok} tok | $${cost.toFixed(5)}` });
+
+  return { text: parsed.text, tok: parsed.tok, ms, cost };
+}
+
+// ══════════════════════════════
+// ══ UI COMPONENTS ════════════
+// ══════════════════════════════
+
+function Pill({ children, color, active, onClick, size = "sm" }) {
+  const pad = size === "xs" ? "2px 6px" : "4px 10px";
+  const fs = size === "xs" ? 8 : 9;
+  return (
+    <button onClick={onClick} style={{
+      padding: pad, fontSize: fs, fontWeight: active ? 700 : 400,
+      background: active ? `${color}18` : "transparent",
+      color: active ? color : T.txM,
+      border: `1px solid ${active ? color + "44" : T.bd}`,
+      borderRadius: 20, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0,
+      fontFamily: T.fn, transition: "all 0.15s",
+    }}>
+      {children}
+    </button>
+  );
+}
+
+function Badge({ status, color }) {
+  const c = { idle: T.txD, queued: "#6366F1", running: color || T.ac, done: T.ac, error: T.dn, paused: T.wn };
+  const l = { idle: "IDLE", queued: "QUEUE", running: "RUNNING", done: "DONE", error: "ERROR", paused: "PAUSED" };
+  const s = c[status] || T.txD;
+  return (
+    <span style={{
+      padding: "2px 6px", fontSize: 7, fontWeight: 700, letterSpacing: 1,
+      color: s, background: `${s}15`, border: `1px solid ${s}33`, borderRadius: 4,
+      display: "inline-flex", alignItems: "center", gap: 3,
+    }}>
+      {status === "running" && <span style={{ width: 4, height: 4, borderRadius: "50%", background: s, animation: "pulse 1.5s infinite" }} />}
+      {l[status] || "--"}
+    </span>
+  );
+}
+
+function LogList({ logs, max = 250, filter = null }) {
+  const ref = useRef(null);
+  const filtered = filter ? logs.filter(l => l.from === filter) : logs;
+  const display = filtered.slice(-60);
+  useEffect(() => { ref.current && (ref.current.scrollTop = ref.current.scrollHeight); }, [display.length]);
+  const col = { info: T.txM, success: T.ac, error: T.dn, warn: T.wn, data: "#A78BFA" };
+  return (
+    <div ref={ref} style={{ maxHeight: max, overflowY: "auto", fontSize: 10, lineHeight: 1.7 }}>
+      {display.length === 0 && <div style={{ padding: 16, color: T.txD, textAlign: "center", fontSize: 11 }}>No logs yet</div>}
+      {display.map(e => (
+        <div key={e.id} style={{ padding: "2px 10px", borderLeft: `2px solid ${col[e.type] || T.txD}22` }}>
+          <span style={{ color: T.txD, fontSize: 8, marginRight: 4 }}>{e.time}</span>
+          {e.from && !filter && <span style={{ color: AGENTS[e.from]?.color || T.inf, marginRight: 4 }}>[{(AGENTS[e.from]?.name || e.from).slice(0, 8)}]</span>}
+          <span style={{ color: col[e.type] || T.txM }}>{e.text}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function StreamBox({ text, color }) {
+  const ref = useRef(null);
+  useEffect(() => { ref.current && (ref.current.scrollTop = ref.current.scrollHeight); }, [text]);
+  if (!text) return <div style={{ padding: 16, color: T.txD, fontSize: 11, textAlign: "center" }}>Awaiting output...</div>;
+  const lines = text.split("\n").slice(-20);
+  return (
+    <pre ref={ref} style={{
+      margin: 0, padding: 10, fontSize: 10, lineHeight: 1.6,
+      color: color || T.tx, whiteSpace: "pre-wrap", wordBreak: "break-all",
+      maxHeight: 220, overflowY: "auto", background: `${T.bg}99`,
+    }}>
+      {lines.map((l, i) => (
+        <div key={i} style={{ opacity: i === lines.length - 1 ? 1 : 0.65 }}>
+          <span style={{ color: T.txD, marginRight: 6, fontSize: 8, userSelect: "none" }}>{String(i + 1).padStart(3)}</span>
+          {l}
+        </div>
+      ))}
+      <span style={{ display: "inline-block", width: 6, height: 13, background: color || T.ac, animation: "blink 1s step-end infinite", verticalAlign: "middle" }} />
+    </pre>
+  );
+}
+
+function MetricStrip({ metrics }) {
+  const items = [
+    { l: "TOKENS", v: metrics.totalTok, c: T.ac },
+    { l: "TIME", v: `${(metrics.totalMs / 1000).toFixed(1)}s`, c: T.inf },
+    { l: "COST", v: `$${metrics.totalCost.toFixed(4)}`, c: T.wn },
+  ];
+  return (
+    <div style={{ display: "flex", gap: 4 }}>
+      {items.map(m => (
+        <div key={m.l} style={{ flex: 1, background: T.s, borderRadius: T.rs, padding: "6px 8px", border: `1px solid ${T.bd}` }}>
+          <div style={{ fontSize: 7, color: T.txM, letterSpacing: 1, fontWeight: 600 }}>{m.l}</div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: m.c, fontFamily: T.fn }}>{m.v}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TokenBar({ perAgent, total }) {
+  if (!total) return null;
+  return (
+    <div style={{ display: "flex", height: 4, borderRadius: 2, overflow: "hidden", background: T.bd, marginTop: 6 }}>
+      {AGENTS_FULL.map(a => {
+        const t = perAgent[a.id] || 0;
+        const p = (t / total) * 100;
+        if (!p) return null;
+        return <div key={a.id} style={{ width: `${p}%`, background: a.color, transition: "width 0.5s" }} title={`${a.name}: ${t}`} />;
+      })}
+    </div>
+  );
+}
+
+// ══ Agent Card (Pipeline view) ══
+function AgentCard({ agent, state, stream, onTap }) {
+  const running = state.status === "running";
+  return (
+    <div onClick={onTap} style={{
+      background: T.s, borderRadius: T.r,
+      border: `1px solid ${running ? agent.color + "55" : T.bd}`,
+      padding: "12px 14px", cursor: "pointer",
+      position: "relative", overflow: "hidden",
+      transition: "all 0.2s",
+      boxShadow: running ? `0 0 20px ${agent.color}10` : "none",
+    }}>
+      {running && (
+        <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, overflow: "hidden" }}>
+          <div style={{ width: "30%", height: "100%", background: `linear-gradient(90deg,transparent,${agent.color},transparent)`, animation: "scan 1.5s linear infinite" }} />
+        </div>
+      )}
+      {/* Header row */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{
+          width: 38, height: 38, borderRadius: "50%",
+          border: `2px solid ${running ? agent.color : state.status === "done" ? T.ac : state.status === "error" ? T.dn : T.bd}`,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          fontSize: 16, color: agent.color,
+          background: running ? `${agent.color}10` : "transparent",
+          flexShrink: 0,
+        }}>
+          {agent.icon}
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: T.tx }}>{agent.name}</span>
+            <Badge status={state.status} color={agent.color} />
+          </div>
+          <div style={{ fontSize: 9, color: T.txM, marginTop: 2 }}>{agent.role}</div>
+          <div style={{ fontSize: 8, color: T.txD, marginTop: 1 }}>Layer {agent.layer}: {agent.layerName}</div>
+        </div>
+        <div style={{ textAlign: "right", fontSize: 9, color: T.txD, flexShrink: 0 }}>
+          <div style={{ color: state.tokens ? T.tx : T.txD }}>{state.tokens || "--"} tok</div>
+          <div>{state.elapsed ? `${state.elapsed}ms` : "--"}</div>
+          {state.cost > 0 && <div style={{ color: T.wn }}>${state.cost.toFixed(4)}</div>}
+        </div>
+      </div>
+
+      {/* Skills row */}
+      <div style={{ display: "flex", gap: 3, marginTop: 8, flexWrap: "wrap" }}>
+        {agent.skills.slice(0, 5).map(s => (
+          <span key={s} style={{ padding: "1px 5px", fontSize: 7, background: `${agent.color}08`, color: `${agent.color}88`, borderRadius: 3, border: `1px solid ${agent.color}15` }}>{s}</span>
+        ))}
+        {agent.skills.length > 5 && <span style={{ fontSize: 7, color: T.txD }}>+{agent.skills.length - 5}</span>}
+      </div>
+
+      {/* Streaming preview */}
+      {running && stream && (
+        <div style={{ marginTop: 8, padding: "4px 8px", background: `${T.bg}88`, borderRadius: T.rx, maxHeight: 36, overflow: "hidden" }}>
+          <pre style={{ margin: 0, fontSize: 8, color: agent.color, whiteSpace: "pre-wrap", opacity: 0.7 }}>
+            {stream.slice(-140)}
+            <span style={{ background: agent.color, width: 4, height: 9, display: "inline-block", animation: "blink .8s step-end infinite" }} />
+          </pre>
+        </div>
+      )}
+
+      {/* Error */}
+      {state.error && (
+        <div style={{ marginTop: 6, padding: "4px 8px", background: `${T.dn}08`, borderRadius: T.rx, fontSize: 9, color: T.dn, border: `1px solid ${T.dn}22` }}>
+          {state.error.slice(0, 80)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ══ Agent Detail View ══
+function AgentDetail({ agent, state, logs, stream, st, dispatch }) {
+  const [tab, setTab] = useState("logs");
+  const agentLogs = logs.filter(l => l.from === agent.id);
+
+  const runSingle = async () => {
+    if (!st.keys[st.provider]) return;
+    dispatch({ t: "AG", id: agent.id, d: { status: "running", error: null, tokens: 0, elapsed: 0, cost: 0 } });
+    dispatch({ t: "LOG", from: agent.id, lt: "info", text: "Starting single agent run..." });
+    try {
+      const r = await callLLM(st, dispatch, agent.id, agent.sys, `Execute your role. Task context: general system build. Be concise and structured.`, agent.maxTok);
+      dispatch({ t: "AG", id: agent.id, d: { status: "done", tokens: r.tok, elapsed: r.ms, cost: r.cost, output: r.text } });
+    } catch (e) {
+      dispatch({ t: "AG", id: agent.id, d: { status: "error", error: e.message } });
+    }
+  };
+
+  const tabs = [
+    { id: "logs", label: "Logs" },
+    { id: "output", label: "Output" },
+    { id: "hooks", label: `Hooks (${agent.hooks.length})` },
+    { id: "skills", label: `Skills (${agent.skills.length})` },
+    { id: "tools", label: `Tools (${agent.tools.length})` },
+    { id: "config", label: "Config" },
+  ];
+
+  return (
+    <div style={{ animation: "slideUp .2s ease-out" }}>
+      {/* Back button */}
+      <button onClick={() => dispatch({ t: "SET_VIEW", v: "pipeline" })} style={{
+        background: "none", border: "none", color: T.txM, fontSize: 11, cursor: "pointer", padding: "4px 0", marginBottom: 8, fontFamily: T.fn,
+      }}>
+        {"\u2190"} Back
+      </button>
+
+      <div style={{ background: T.s, borderRadius: T.r, border: `1px solid ${agent.color}22`, overflow: "hidden" }}>
+        {/* Agent header */}
+        <div style={{ padding: "14px 16px", background: `${agent.color}06`, borderBottom: `1px solid ${agent.color}12` }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{
+              width: 44, height: 44, borderRadius: "50%",
+              border: `2px solid ${agent.color}66`,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontSize: 20, color: agent.color, background: `${agent.color}08`,
+            }}>
+              {agent.icon}
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 16, fontWeight: 800, color: T.tx, fontFamily: T.fd }}>{agent.name}</div>
+              <div style={{ fontSize: 10, color: T.txM, marginTop: 2 }}>{agent.role}</div>
+              <div style={{ fontSize: 9, color: T.txD, marginTop: 1 }}>Layer {agent.layer} / {agent.layerName} / {agent.category}</div>
+            </div>
+            <Badge status={state.status} color={agent.color} />
+          </div>
+          <p style={{ fontSize: 10, color: T.txM, margin: "10px 0 0", lineHeight: 1.6 }}>{agent.desc}</p>
+          {/* Run button */}
+          <button onClick={runSingle} disabled={state.status === "running" || !st.keys[st.provider]} style={{
+            marginTop: 10, padding: "8px 0", width: "100%",
+            background: state.status === "running" ? T.s2 : `linear-gradient(135deg, ${agent.color}, ${agent.color}88)`,
+            color: state.status === "running" ? T.txD : T.bg,
+            border: "none", borderRadius: T.rs, fontSize: 11, fontWeight: 700,
+            cursor: state.status === "running" ? "not-allowed" : "pointer",
+            fontFamily: T.fn, letterSpacing: 1,
+          }}>
+            {state.status === "running" ? "RUNNING..." : `RUN ${agent.name.toUpperCase()}`}
+          </button>
+        </div>
+
+        {/* Stats bar */}
+        <div style={{ display: "flex", gap: 16, padding: "8px 16px", fontSize: 10, color: T.txM, borderBottom: `1px solid ${T.bd}` }}>
+          <span>Tokens: <b style={{ color: T.tx }}>{state.tokens || "--"}</b></span>
+          <span>Time: <b style={{ color: T.tx }}>{state.elapsed ? `${state.elapsed}ms` : "--"}</b></span>
+          <span>Cost: <b style={{ color: T.wn }}>{state.cost ? `$${state.cost.toFixed(5)}` : "--"}</b></span>
+          <span>Retries: <b style={{ color: state.retries > 0 ? T.wn : T.tx }}>{state.retries}</b></span>
+        </div>
+
+        {/* Tab bar */}
+        <div style={{ display: "flex", overflowX: "auto", borderBottom: `1px solid ${T.bd}` }}>
+          {tabs.map(t => (
+            <button key={t.id} onClick={() => setTab(t.id)} style={{
+              padding: "7px 10px", fontSize: 9, fontWeight: tab === t.id ? 700 : 400,
+              background: tab === t.id ? `${agent.color}0C` : "transparent",
+              color: tab === t.id ? agent.color : T.txM,
+              border: "none", borderBottom: tab === t.id ? `2px solid ${agent.color}` : "2px solid transparent",
+              cursor: "pointer", whiteSpace: "nowrap", fontFamily: T.fn, flexShrink: 0,
+            }}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Tab content */}
+        <div>
+          {tab === "logs" && <LogList logs={agentLogs} max={260} />}
+          {tab === "output" && <StreamBox text={stream || state.output} color={agent.color} />}
+          {tab === "hooks" && (
+            <div style={{ padding: 12 }}>
+              {agent.hooks.map(h => (
+                <div key={h} style={{ padding: "4px 0", fontSize: 10, color: T.txM, display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ color: agent.color, fontWeight: 700 }}>+</span>
+                  <span style={{ color: T.tx }}>{h}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {tab === "skills" && (
+            <div style={{ padding: 12, display: "flex", flexWrap: "wrap", gap: 4 }}>
+              {agent.skills.map(s => (
+                <span key={s} style={{ padding: "3px 8px", fontSize: 9, background: `${agent.color}0A`, color: agent.color, borderRadius: 4, border: `1px solid ${agent.color}22` }}>{s}</span>
+              ))}
+            </div>
+          )}
+          {tab === "tools" && (
+            <div style={{ padding: 12 }}>
+              {agent.tools.map(t => (
+                <div key={t} style={{ padding: "4px 0", fontSize: 10, color: T.txM, display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ color: T.wn, fontWeight: 700 }}>#</span>
+                  <span style={{ color: T.tx }}>{t}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {tab === "config" && (
+            <div style={{ padding: 12, fontSize: 10, lineHeight: 2, color: T.txM }}>
+              <div>Temperature: <b style={{ color: T.tx }}>{agent.temp}</b></div>
+              <div>Max tokens: <b style={{ color: T.tx }}>{agent.maxTok}</b></div>
+              <div>Output format: <b style={{ color: T.tx }}>{agent.format}</b></div>
+              <div>Inputs from: <b style={{ color: T.tx }}>{agent.inputFrom.length ? agent.inputFrom.join(", ") : "none (root)"}</b></div>
+              <div>Outputs to: <b style={{ color: T.tx }}>{agent.outputTo.join(", ") || "none"}</b></div>
+            </div>
+          )}
+        </div>
+
+        {/* Error */}
+        {state.error && (
+          <div style={{ padding: "8px 16px", background: `${T.dn}08`, borderTop: `1px solid ${T.dn}22`, fontSize: 10, color: T.dn }}>{state.error}</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ══ Settings View ══
+function SettingsView({ st, dispatch }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14, animation: "slideUp .2s ease-out" }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: T.txM, letterSpacing: 1 }}>PROVIDER</div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        {Object.values(PROVIDERS).map(p => (
+          <Pill key={p.id} color={p.color} active={st.provider === p.id} onClick={() => dispatch({ t: "PROV", v: p.id })}>{p.name}</Pill>
+        ))}
+      </div>
+
+      <div style={{ fontSize: 11, fontWeight: 700, color: T.txM, letterSpacing: 1 }}>MODEL</div>
+      <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+        {PROVIDERS[st.provider].models.map(m => (
+          <Pill key={m.id} color={PROVIDERS[st.provider].color} active={st.model === m.id} onClick={() => dispatch({ t: "MOD", v: m.id })} size="xs">{m.label}</Pill>
+        ))}
+      </div>
+
+      <div style={{ fontSize: 11, fontWeight: 700, color: T.txM, letterSpacing: 1 }}>API KEYS</div>
+      {Object.values(PROVIDERS).map(p => (
+        <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ width: 8, height: 8, borderRadius: "50%", background: st.keys[p.id] ? T.ac : T.txD, flexShrink: 0 }} />
+          <span style={{ fontSize: 10, color: p.color, width: 72, flexShrink: 0, fontWeight: 600 }}>{p.name}</span>
+          <input
+            type="password"
+            value={st.keys[p.id]}
+            onChange={e => dispatch({ t: "KEY", p: p.id, v: e.target.value })}
+            placeholder={`API key...`}
+            style={{
+              flex: 1, background: T.s, border: `1px solid ${T.bd}`, borderRadius: T.rs,
+              color: T.tx, padding: "8px 10px", fontSize: 11, outline: "none", fontFamily: T.fn,
+            }}
+          />
+        </div>
+      ))}
+
+      <div style={{ marginTop: 8, padding: 12, background: T.s, borderRadius: T.r, border: `1px solid ${T.bd}` }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: T.txM, marginBottom: 6 }}>SYSTEM INFO</div>
+        <div style={{ fontSize: 9, color: T.txM, lineHeight: 2 }}>
+          <div>Agents loaded: <b style={{ color: T.tx }}>{AGENTS_FULL.length}</b> (Phase 3 — 10 layers active)</div>
+          <div>Layers active: <b style={{ color: T.tx }}>{[...new Set(AGENTS_FULL.map(a => a.layer))].length}</b></div>
+          <div>Provider: <b style={{ color: PROVIDERS[st.provider].color }}>{PROVIDERS[st.provider].name}</b></div>
+          <div>Model: <b style={{ color: T.tx }}>{st.model}</b></div>
+          <div>Total hooks: <b style={{ color: T.tx }}>{AGENTS_FULL.reduce((s, a) => s + a.hooks.length, 0)}</b></div>
+          <div>Total skills: <b style={{ color: T.tx }}>{AGENTS_FULL.reduce((s, a) => s + a.skills.length, 0)}</b></div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═════════════════════════════════
+// ═════ MAIN APP ═════════════════
+// ═════════════════════════════════
+export default function AgentOS() {
+  const [st, dispatch] = useReducer(red, init);
+  const [task, setTask] = useState("");
+  const [view, setView] = useState("pipeline"); // pipeline | detail | logs | metrics | settings
+  const [selectedAgent, setSelectedAgent] = useState(null);
+
+  const openAgent = (id) => { setSelectedAgent(id); setView("detail"); };
+
+  const runPipeline = async () => {
+    if (!task.trim() || !st.keys[st.provider]) return;
+    dispatch({ t: "RST" });
+    dispatch({ t: "ST", v: "running" });
+
+    let prevOutput = "";
+    for (const agent of AGENTS_FULL) {
+      dispatch({ t: "AG", id: agent.id, d: { status: "running", error: null } });
+      dispatch({ t: "LOG", from: agent.id, lt: "info", text: "Starting..." });
+      try {
+        const input = `Task: ${task}\n\nPrevious agent output:\n${prevOutput.slice(0, 600) || "(first in pipeline)"}\n\nYour role: ${agent.role}. Execute.`;
+        const r = await callLLM(st, dispatch, agent.id, agent.sys, input, agent.maxTok);
+        dispatch({ t: "AG", id: agent.id, d: { status: "done", tokens: r.tok, elapsed: r.ms, cost: r.cost, output: r.text } });
+
+        const next = AGENTS_FULL[AGENTS_FULL.indexOf(agent) + 1];
+        if (next) dispatch({ t: "BUS", from: agent.id, to: next.id, text: r.text.slice(0, 80) + "..." });
+        prevOutput = r.text;
+      } catch (e) {
+        dispatch({ t: "AG", id: agent.id, d: { status: "error", error: e.message } });
+        dispatch({ t: "ST", v: "error" });
+        return;
+      }
+    }
+    dispatch({ t: "ST", v: "done" });
+  };
+
+  const nav = [
+    { id: "pipeline", label: "Pipeline", icon: "\u25C8" },
+    { id: "logs", label: "Logs", icon: "\u25CE" },
+    { id: "metrics", label: "Stats", icon: "\u25C9" },
+    { id: "settings", label: "Settings", icon: "\u2699" },
+  ];
+
+  return (
+    <div style={{ minHeight: "100vh", background: T.bg, color: T.tx, fontFamily: T.fn, paddingBottom: 64, WebkitFontSmoothing: "antialiased" }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600;700&family=Outfit:wght@400;600;700;800&display=swap');
+        @keyframes blink { 50% { opacity: 0 } }
+        @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.4 } }
+        @keyframes scan { 0% { transform: translateX(-100%) } 100% { transform: translateX(400%) } }
+        @keyframes slideUp { from { transform: translateY(8px); opacity: 0 } to { transform: translateY(0); opacity: 1 } }
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        ::-webkit-scrollbar { width: 3px } ::-webkit-scrollbar-track { background: transparent } ::-webkit-scrollbar-thumb { background: ${T.bd}; border-radius: 2px }
+        body { margin: 0; overflow-x: hidden; background: ${T.bg} }
+        input, textarea, button { font-family: ${T.fn} }
+      `}</style>
+
+      {/* ══ HEADER ══ */}
+      <div style={{
+        position: "sticky", top: 0, zIndex: 100,
+        padding: "12px 14px",
+        background: `${T.bg}F0`,
+        backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)",
+        borderBottom: `1px solid ${T.bd}`,
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{
+            width: 8, height: 8, borderRadius: "50%",
+            background: st.status === "running" ? T.ac : st.status === "error" ? T.dn : T.txD,
+            boxShadow: st.status === "running" ? `0 0 8px ${T.ac}` : "none",
+            transition: "all 0.3s",
+          }} />
+          <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: 3, color: T.ac, fontFamily: T.fd }}>AGENT OS</span>
+          <span style={{
+            fontSize: 8, color: PROVIDERS[st.provider]?.color,
+            background: `${PROVIDERS[st.provider]?.color}12`,
+            padding: "2px 7px", borderRadius: 10, fontWeight: 600,
+            border: `1px solid ${PROVIDERS[st.provider]?.color}22`,
+          }}>
+            {PROVIDERS[st.provider]?.name} / {st.model.split("/").pop().split("-").slice(0, 2).join(" ")}
+          </span>
+          <div style={{ flex: 1 }} />
+          <Badge status={st.status} />
+        </div>
+        {/* Running indicator */}
+        {st.status === "running" && (
+          <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, height: 2, overflow: "hidden" }}>
+            <div style={{ width: "30%", height: "100%", background: `linear-gradient(90deg,transparent,${T.ac},transparent)`, animation: "scan 2s linear infinite" }} />
+          </div>
+        )}
+      </div>
+
+      {/* ══ CONTENT ══ */}
+      <div style={{ padding: "12px 14px 80px" }}>
+        {/* Task input */}
+        {view !== "settings" && view !== "detail" && (
+          <div style={{ marginBottom: 12 }}>
+            <textarea
+              value={task} onChange={e => setTask(e.target.value)}
+              placeholder="Describe what to build..."
+              rows={2} disabled={st.status === "running"}
+              style={{
+                width: "100%", background: T.s, border: `1px solid ${T.bd}`, borderRadius: T.r,
+                color: T.tx, padding: 12, fontSize: 13, resize: "none", outline: "none",
+                lineHeight: 1.5, transition: "border-color 0.2s",
+              }}
+              onFocus={e => e.target.style.borderColor = T.ac}
+              onBlur={e => e.target.style.borderColor = T.bd}
+            />
+            <button
+              onClick={runPipeline}
+              disabled={st.status === "running" || !task.trim() || !st.keys[st.provider]}
+              style={{
+                width: "100%", marginTop: 8, padding: "12px 0",
+                background: (st.status === "running" || !st.keys[st.provider]) ? T.s2 : `linear-gradient(135deg, ${T.ac}, #059669)`,
+                color: (st.status === "running" || !st.keys[st.provider]) ? T.txD : T.bg,
+                border: "none", borderRadius: T.rs, fontSize: 12, fontWeight: 700,
+                cursor: st.status === "running" ? "not-allowed" : "pointer", letterSpacing: 2,
+                transition: "all 0.2s",
+              }}
+            >
+              {st.status === "running" ? "RUNNING PIPELINE..." : !st.keys[st.provider] ? "SET API KEY IN SETTINGS" : "RUN PIPELINE"}
+            </button>
+          </div>
+        )}
+
+        {/* Metrics strip */}
+        {view !== "settings" && view !== "detail" && (
+          <>
+            <MetricStrip metrics={st.metrics} />
+            <TokenBar perAgent={st.metrics.perAgent} total={st.metrics.totalTok} />
+          </>
+        )}
+
+        {/* Pipeline view */}
+        {view === "pipeline" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 12, animation: "slideUp .2s ease-out" }}>
+            {AGENTS_FULL.map(a => (
+              <AgentCard key={a.id} agent={a} state={st.agents[a.id]} stream={st.streams[a.id]} onTap={() => openAgent(a.id)} />
+            ))}
+          </div>
+        )}
+
+        {/* Agent detail */}
+        {view === "detail" && selectedAgent && AGENTS[selectedAgent] && (
+          <AgentDetail
+            agent={AGENTS[selectedAgent]} state={st.agents[selectedAgent]}
+            logs={st.logs} stream={st.streams[selectedAgent]}
+            st={st} dispatch={dispatch}
+          />
+        )}
+
+        {/* Logs */}
+        {view === "logs" && (
+          <div style={{ marginTop: 12, animation: "slideUp .2s ease-out" }}>
+            <div style={{ background: T.s, borderRadius: T.r, border: `1px solid ${T.bd}`, overflow: "hidden" }}>
+              <div style={{ padding: "10px 14px", borderBottom: `1px solid ${T.bd}`, display: "flex", alignItems: "center" }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: T.txM, letterSpacing: 1 }}>GLOBAL LOG</span>
+                <span style={{ fontSize: 9, color: T.txD, marginLeft: "auto" }}>{st.logs.length} entries</span>
+              </div>
+              <LogList logs={st.logs} max={400} />
+            </div>
+            {st.bus.length > 0 && (
+              <div style={{ marginTop: 10, background: T.s, borderRadius: T.r, border: `1px solid ${T.bd}`, overflow: "hidden" }}>
+                <div style={{ padding: "10px 14px", borderBottom: `1px solid ${T.bd}` }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: T.txM, letterSpacing: 1 }}>AGENT BUS</span>
+                </div>
+                <div style={{ maxHeight: 200, overflowY: "auto" }}>
+                  {st.bus.map(m => (
+                    <div key={m.id} style={{ padding: "4px 10px", fontSize: 10, borderBottom: `1px solid ${T.bd}` }}>
+                      <span style={{ color: AGENTS[m.from]?.color }}>{AGENTS[m.from]?.name}</span>
+                      <span style={{ color: T.txD }}> {"\u2192"} </span>
+                      <span style={{ color: AGENTS[m.to]?.color }}>{AGENTS[m.to]?.name}</span>
+                      <span style={{ color: T.txD, marginLeft: 6, fontSize: 8 }}>{m.time}</span>
+                      <div style={{ color: T.txM, paddingLeft: 8, fontSize: 9, marginTop: 1 }}>{m.text.slice(0, 80)}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Metrics */}
+        {view === "metrics" && (
+          <div style={{ marginTop: 12, animation: "slideUp .2s ease-out" }}>
+            <div style={{ background: T.s, borderRadius: T.r, border: `1px solid ${T.bd}`, padding: 14 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: T.txM, letterSpacing: 1, marginBottom: 10 }}>AGENT BREAKDOWN</div>
+              {AGENTS_FULL.map(a => {
+                const s = st.agents[a.id];
+                const tok = st.metrics.perAgent[a.id] || 0;
+                const pct = st.metrics.totalTok ? ((tok / st.metrics.totalTok) * 100).toFixed(1) : "0";
+                return (
+                  <div key={a.id} onClick={() => openAgent(a.id)} style={{
+                    display: "flex", alignItems: "center", gap: 8, padding: "8px 0",
+                    borderBottom: `1px solid ${T.bd}`, cursor: "pointer",
+                  }}>
+                    <span style={{ fontSize: 14, color: a.color, width: 20 }}>{a.icon}</span>
+                    <span style={{ fontSize: 11, color: T.tx, flex: 1 }}>{a.name}</span>
+                    <Badge status={s.status} color={a.color} />
+                    <span style={{ fontSize: 9, color: T.txM, width: 50, textAlign: "right" }}>{tok} tok</span>
+                    <span style={{ fontSize: 9, color: a.color, fontWeight: 700, width: 36, textAlign: "right" }}>{pct}%</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Settings */}
+        {view === "settings" && <SettingsView st={st} dispatch={dispatch} />}
+      </div>
+
+      {/* ══ BOTTOM NAV ══ */}
+      <div style={{
+        position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 100,
+        display: "flex", background: `${T.bg}F5`,
+        backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)",
+        borderTop: `1px solid ${T.bd}`,
+        padding: "6px 0",
+        paddingBottom: "max(6px, env(safe-area-inset-bottom))",
+      }}>
+        {nav.map(n => {
+          const active = (view === n.id) || (view === "detail" && n.id === "pipeline");
+          return (
+            <button key={n.id} onClick={() => { setView(n.id); if (n.id !== "detail") setSelectedAgent(null); }} style={{
+              flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 2,
+              background: "none", border: "none", cursor: "pointer",
+              color: active ? T.ac : T.txD, padding: "4px 0",
+              transition: "color 0.15s", fontFamily: T.fn,
+            }}>
+              <span style={{ fontSize: 16, transition: "transform 0.15s", transform: active ? "scale(1.1)" : "scale(1)" }}>{n.icon}</span>
+              <span style={{ fontSize: 8, fontWeight: active ? 700 : 400, letterSpacing: 0.5 }}>{n.label}</span>
+              {active && <div style={{ width: 16, height: 2, borderRadius: 1, background: T.ac, marginTop: 1 }} />}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
