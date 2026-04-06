@@ -1,10 +1,9 @@
 import { useState, useEffect, useRef, useReducer, useCallback } from "react";
 
 /* ═══════════════════════════════════════════════════════════════
-   AGENT OS v3 — Professional Mobile App
-   12 Agents (Phase 3) | Multi-Provider | Full Architecture
-   Files: src/core/theme.js, providers.js, agentBase.js
-          src/agents/01-04
+   AGENT OS v3 — Professional Multi-Agent Orchestration System
+   12 Agents | 10 Architectural Layers | Multi-Provider LLM
+   Providers: Anthropic, Groq, Gemini, OpenRouter
    ═══════════════════════════════════════════════════════════════ */
 
 // ══ INLINE: Theme ══
@@ -350,14 +349,14 @@ function Badge({ status, color }) {
   );
 }
 
-function LogList({ logs, max = 250, filter = null }) {
+function LogList({ logs, maxHeight = 250, limit = 200, filter = null }) {
   const ref = useRef(null);
   const filtered = filter ? logs.filter(l => l.from === filter) : logs;
-  const display = filtered.slice(-60);
+  const display = filtered.slice(-limit);
   useEffect(() => { ref.current && (ref.current.scrollTop = ref.current.scrollHeight); }, [display.length]);
   const col = { info: T.txM, success: T.ac, error: T.dn, warn: T.wn, data: "#A78BFA" };
   return (
-    <div ref={ref} style={{ maxHeight: max, overflowY: "auto", fontSize: 10, lineHeight: 1.7 }}>
+    <div ref={ref} style={{ maxHeight: maxHeight, overflowY: "auto", fontSize: 10, lineHeight: 1.7 }}>
       {display.length === 0 && <div style={{ padding: 16, color: T.txD, textAlign: "center", fontSize: 11 }}>No logs yet</div>}
       {display.map(e => (
         <div key={e.id} style={{ padding: "2px 10px", borderLeft: `2px solid ${col[e.type] || T.txD}22` }}>
@@ -370,24 +369,30 @@ function LogList({ logs, max = 250, filter = null }) {
   );
 }
 
-function StreamBox({ text, color }) {
+function StreamBox({ text, color, streaming = false }) {
   const ref = useRef(null);
   useEffect(() => { ref.current && (ref.current.scrollTop = ref.current.scrollHeight); }, [text]);
-  if (!text) return <div style={{ padding: 16, color: T.txD, fontSize: 11, textAlign: "center" }}>Awaiting output...</div>;
-  const lines = text.split("\n").slice(-20);
+  if (!text) return (
+    <div style={{ padding: 16, color: T.txD, fontSize: 11, textAlign: "center", fontFamily: T.fn }}>
+      Awaiting output...
+    </div>
+  );
+  const lines = text.split("\n");
   return (
     <pre ref={ref} style={{
       margin: 0, padding: 10, fontSize: 10, lineHeight: 1.6,
       color: color || T.tx, whiteSpace: "pre-wrap", wordBreak: "break-all",
-      maxHeight: 220, overflowY: "auto", background: `${T.bg}99`,
+      maxHeight: 260, overflowY: "auto", background: `${T.bg}99`, fontFamily: T.fn,
     }}>
       {lines.map((l, i) => (
-        <div key={i} style={{ opacity: i === lines.length - 1 ? 1 : 0.65 }}>
+        <div key={`line-${i}`} style={{ opacity: i < lines.length - 1 ? 0.75 : 1 }}>
           <span style={{ color: T.txD, marginRight: 6, fontSize: 8, userSelect: "none" }}>{String(i + 1).padStart(3)}</span>
           {l}
         </div>
       ))}
-      <span style={{ display: "inline-block", width: 6, height: 13, background: color || T.ac, animation: "blink 1s step-end infinite", verticalAlign: "middle" }} />
+      {streaming && (
+        <span style={{ display: "inline-block", width: 6, height: 13, background: color || T.ac, animation: "blink 1s step-end infinite", verticalAlign: "middle" }} />
+      )}
     </pre>
   );
 }
@@ -478,10 +483,10 @@ function AgentCard({ agent, state, stream, onTap }) {
 
       {/* Streaming preview */}
       {running && stream && (
-        <div style={{ marginTop: 8, padding: "4px 8px", background: `${T.bg}88`, borderRadius: T.rx, maxHeight: 36, overflow: "hidden" }}>
-          <pre style={{ margin: 0, fontSize: 8, color: agent.color, whiteSpace: "pre-wrap", opacity: 0.7 }}>
-            {stream.slice(-140)}
-            <span style={{ background: agent.color, width: 4, height: 9, display: "inline-block", animation: "blink .8s step-end infinite" }} />
+        <div style={{ marginTop: 8, padding: "4px 8px", background: `${T.bg}88`, borderRadius: T.rx, maxHeight: 40, overflow: "hidden" }}>
+          <pre style={{ margin: 0, fontSize: 8, color: agent.color, whiteSpace: "pre-wrap", wordBreak: "break-all", opacity: 0.8, fontFamily: T.fn }}>
+            {stream.slice(-160)}
+            <span style={{ background: agent.color, width: 4, height: 9, display: "inline-block", animation: "blink .8s step-end infinite", verticalAlign: "middle" }} />
           </pre>
         </div>
       )}
@@ -497,19 +502,21 @@ function AgentCard({ agent, state, stream, onTap }) {
 }
 
 // ══ Agent Detail View ══
-function AgentDetail({ agent, state, logs, stream, st, dispatch }) {
+function AgentDetail({ agent, state, logs, stream, st, dispatch, onBack }) {
   const [tab, setTab] = useState("logs");
   const agentLogs = logs.filter(l => l.from === agent.id);
 
   const runSingle = async () => {
     if (!st.keys[st.provider]) return;
-    dispatch({ t: "AG", id: agent.id, d: { status: "running", error: null, tokens: 0, elapsed: 0, cost: 0 } });
-    dispatch({ t: "LOG", from: agent.id, lt: "info", text: "Starting single agent run..." });
+    dispatch({ t: "AG", id: agent.id, d: { status: "running", error: null, tokens: 0, elapsed: 0, cost: 0, output: "" } });
+    dispatch({ t: "LOG", from: agent.id, lt: "info", text: `Running ${agent.name} standalone...` });
     try {
-      const r = await callLLM(st, dispatch, agent.id, agent.sys, `Execute your role. Task context: general system build. Be concise and structured.`, agent.maxTok);
+      const r = await callLLM(st, dispatch, agent.id, agent.sys, `Execute your role as ${agent.role}. Provide a comprehensive structured response. Be concise and use the defined output format.`, agent.maxTok);
       dispatch({ t: "AG", id: agent.id, d: { status: "done", tokens: r.tok, elapsed: r.ms, cost: r.cost, output: r.text } });
+      dispatch({ t: "LOG", from: agent.id, lt: "success", text: `Completed in ${r.ms}ms | ${r.tok} tokens` });
     } catch (e) {
       dispatch({ t: "AG", id: agent.id, d: { status: "error", error: e.message } });
+      dispatch({ t: "LOG", from: agent.id, lt: "error", text: `Error: ${e.message}` });
     }
   };
 
@@ -525,7 +532,7 @@ function AgentDetail({ agent, state, logs, stream, st, dispatch }) {
   return (
     <div style={{ animation: "slideUp .2s ease-out" }}>
       {/* Back button */}
-      <button onClick={() => dispatch({ t: "SET_VIEW", v: "pipeline" })} style={{
+      <button onClick={onBack} aria-label="Back to pipeline" style={{
         background: "none", border: "none", color: T.txM, fontSize: 11, cursor: "pointer", padding: "4px 0", marginBottom: 8, fontFamily: T.fn,
       }}>
         {"\u2190"} Back
@@ -552,15 +559,20 @@ function AgentDetail({ agent, state, logs, stream, st, dispatch }) {
           </div>
           <p style={{ fontSize: 10, color: T.txM, margin: "10px 0 0", lineHeight: 1.6 }}>{agent.desc}</p>
           {/* Run button */}
-          <button onClick={runSingle} disabled={state.status === "running" || !st.keys[st.provider]} style={{
-            marginTop: 10, padding: "8px 0", width: "100%",
-            background: state.status === "running" ? T.s2 : `linear-gradient(135deg, ${agent.color}, ${agent.color}88)`,
-            color: state.status === "running" ? T.txD : T.bg,
-            border: "none", borderRadius: T.rs, fontSize: 11, fontWeight: 700,
-            cursor: state.status === "running" ? "not-allowed" : "pointer",
-            fontFamily: T.fn, letterSpacing: 1,
-          }}>
-            {state.status === "running" ? "RUNNING..." : `RUN ${agent.name.toUpperCase()}`}
+          <button
+            onClick={runSingle}
+            disabled={state.status === "running" || !st.keys[st.provider]}
+            aria-label={`Run ${agent.name} agent`}
+            style={{
+              marginTop: 10, padding: "8px 0", width: "100%",
+              background: (state.status === "running" || !st.keys[st.provider]) ? T.s2 : `linear-gradient(135deg, ${agent.color}, ${agent.color}88)`,
+              color: (state.status === "running" || !st.keys[st.provider]) ? T.txD : T.bg,
+              border: "none", borderRadius: T.rs, fontSize: 11, fontWeight: 700,
+              cursor: (state.status === "running" || !st.keys[st.provider]) ? "not-allowed" : "pointer",
+              fontFamily: T.fn, letterSpacing: 1,
+            }}
+          >
+            {state.status === "running" ? "RUNNING..." : !st.keys[st.provider] ? "ADD API KEY IN SETTINGS" : `RUN ${agent.name.toUpperCase()}`}
           </button>
         </div>
 
@@ -589,8 +601,8 @@ function AgentDetail({ agent, state, logs, stream, st, dispatch }) {
 
         {/* Tab content */}
         <div>
-          {tab === "logs" && <LogList logs={agentLogs} max={260} />}
-          {tab === "output" && <StreamBox text={stream || state.output} color={agent.color} />}
+          {tab === "logs" && <LogList logs={agentLogs} maxHeight={260} />}
+          {tab === "output" && <StreamBox text={stream || state.output} color={agent.color} streaming={state.status === "running"} />}
           {tab === "hooks" && (
             <div style={{ padding: 12 }}>
               {agent.hooks.map(h => (
@@ -665,7 +677,9 @@ function SettingsView({ st, dispatch }) {
             type="password"
             value={st.keys[p.id]}
             onChange={e => dispatch({ t: "KEY", p: p.id, v: e.target.value })}
-            placeholder={`API key...`}
+            placeholder="API key..."
+            aria-label={`${p.name} API key`}
+            autoComplete="off"
             style={{
               flex: 1, background: T.s, border: `1px solid ${T.bd}`, borderRadius: T.rs,
               color: T.tx, padding: "8px 10px", fontSize: 11, outline: "none", fontFamily: T.fn,
@@ -677,12 +691,13 @@ function SettingsView({ st, dispatch }) {
       <div style={{ marginTop: 8, padding: 12, background: T.s, borderRadius: T.r, border: `1px solid ${T.bd}` }}>
         <div style={{ fontSize: 10, fontWeight: 700, color: T.txM, marginBottom: 6 }}>SYSTEM INFO</div>
         <div style={{ fontSize: 9, color: T.txM, lineHeight: 2 }}>
-          <div>Agents loaded: <b style={{ color: T.tx }}>{AGENTS_FULL.length}</b> (Phase 3 — 10 layers active)</div>
-          <div>Layers active: <b style={{ color: T.tx }}>{[...new Set(AGENTS_FULL.map(a => a.layer))].length}</b></div>
+          <div>Agents loaded: <b style={{ color: T.tx }}>{AGENTS_FULL.length}</b></div>
+          <div>Active layers: <b style={{ color: T.tx }}>{[...new Set(AGENTS_FULL.map(a => a.layer))].sort((a, b) => a - b).join(", ")}</b></div>
           <div>Provider: <b style={{ color: PROVIDERS[st.provider].color }}>{PROVIDERS[st.provider].name}</b></div>
           <div>Model: <b style={{ color: T.tx }}>{st.model}</b></div>
           <div>Total hooks: <b style={{ color: T.tx }}>{AGENTS_FULL.reduce((s, a) => s + a.hooks.length, 0)}</b></div>
           <div>Total skills: <b style={{ color: T.tx }}>{AGENTS_FULL.reduce((s, a) => s + a.skills.length, 0)}</b></div>
+          <div>Total tools: <b style={{ color: T.tx }}>{AGENTS_FULL.reduce((s, a) => s + a.tools.length, 0)}</b></div>
         </div>
       </div>
     </div>
@@ -697,16 +712,27 @@ export default function AgentOS() {
   const [task, setTask] = useState("");
   const [view, setView] = useState("pipeline"); // pipeline | detail | logs | metrics | settings
   const [selectedAgent, setSelectedAgent] = useState(null);
+  const cancelRef = useRef(false);
 
-  const openAgent = (id) => { setSelectedAgent(id); setView("detail"); };
+  const openAgent = useCallback((id) => { setSelectedAgent(id); setView("detail"); }, []);
+  const closeAgent = useCallback(() => { setSelectedAgent(null); setView("pipeline"); }, []);
+  const cancelPipeline = useCallback(() => { cancelRef.current = true; }, []);
 
-  const runPipeline = async () => {
+  const runPipeline = useCallback(async () => {
     if (!task.trim() || !st.keys[st.provider]) return;
+    cancelRef.current = false;
     dispatch({ t: "RST" });
     dispatch({ t: "ST", v: "running" });
+    // Mark all agents as queued before starting
+    AGENTS_FULL.forEach(a => dispatch({ t: "AG", id: a.id, d: { status: "queued" } }));
 
     let prevOutput = "";
     for (const agent of AGENTS_FULL) {
+      if (cancelRef.current) {
+        dispatch({ t: "ST", v: "idle" });
+        dispatch({ t: "LOG", from: agent.id, lt: "warn", text: "Pipeline cancelled by user." });
+        break;
+      }
       dispatch({ t: "AG", id: agent.id, d: { status: "running", error: null } });
       dispatch({ t: "LOG", from: agent.id, lt: "info", text: "Starting..." });
       try {
@@ -719,12 +745,13 @@ export default function AgentOS() {
         prevOutput = r.text;
       } catch (e) {
         dispatch({ t: "AG", id: agent.id, d: { status: "error", error: e.message } });
+        dispatch({ t: "LOG", from: agent.id, lt: "error", text: `Failed: ${e.message}` });
         dispatch({ t: "ST", v: "error" });
         return;
       }
     }
-    dispatch({ t: "ST", v: "done" });
-  };
+    if (!cancelRef.current) dispatch({ t: "ST", v: "done" });
+  }, [st, task]);
 
   const nav = [
     { id: "pipeline", label: "Pipeline", icon: "\u25C8" },
@@ -769,7 +796,7 @@ export default function AgentOS() {
             padding: "2px 7px", borderRadius: 10, fontWeight: 600,
             border: `1px solid ${PROVIDERS[st.provider]?.color}22`,
           }}>
-            {PROVIDERS[st.provider]?.name} / {st.model.split("/").pop().split("-").slice(0, 2).join(" ")}
+            {PROVIDERS[st.provider]?.name} / {PROVIDERS[st.provider]?.models.find(m => m.id === st.model)?.label || st.model.split("/").pop()}
           </span>
           <div style={{ flex: 1 }} />
           <Badge status={st.status} />
@@ -784,40 +811,58 @@ export default function AgentOS() {
 
       {/* ══ CONTENT ══ */}
       <div style={{ padding: "12px 14px 80px" }}>
-        {/* Task input */}
-        {view !== "settings" && view !== "detail" && (
+        {/* Task input — pipeline view only */}
+        {view === "pipeline" && (
           <div style={{ marginBottom: 12 }}>
             <textarea
               value={task} onChange={e => setTask(e.target.value)}
-              placeholder="Describe what to build..."
+              placeholder="Describe what to build... (e.g. 'e-commerce platform with auth, cart, payments')"
               rows={2} disabled={st.status === "running"}
+              aria-label="Task description"
               style={{
                 width: "100%", background: T.s, border: `1px solid ${T.bd}`, borderRadius: T.r,
                 color: T.tx, padding: 12, fontSize: 13, resize: "none", outline: "none",
-                lineHeight: 1.5, transition: "border-color 0.2s",
+                lineHeight: 1.5, transition: "border-color 0.2s", fontFamily: T.fn,
               }}
               onFocus={e => e.target.style.borderColor = T.ac}
               onBlur={e => e.target.style.borderColor = T.bd}
             />
-            <button
-              onClick={runPipeline}
-              disabled={st.status === "running" || !task.trim() || !st.keys[st.provider]}
-              style={{
-                width: "100%", marginTop: 8, padding: "12px 0",
-                background: (st.status === "running" || !st.keys[st.provider]) ? T.s2 : `linear-gradient(135deg, ${T.ac}, #059669)`,
-                color: (st.status === "running" || !st.keys[st.provider]) ? T.txD : T.bg,
-                border: "none", borderRadius: T.rs, fontSize: 12, fontWeight: 700,
-                cursor: st.status === "running" ? "not-allowed" : "pointer", letterSpacing: 2,
-                transition: "all 0.2s",
-              }}
-            >
-              {st.status === "running" ? "RUNNING PIPELINE..." : !st.keys[st.provider] ? "SET API KEY IN SETTINGS" : "RUN PIPELINE"}
-            </button>
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <button
+                onClick={runPipeline}
+                disabled={st.status === "running" || !task.trim() || !st.keys[st.provider]}
+                aria-label={st.status === "running" ? "Pipeline running" : "Run pipeline"}
+                style={{
+                  flex: 1, padding: "12px 0",
+                  background: (st.status === "running" || !st.keys[st.provider] || !task.trim()) ? T.s2 : `linear-gradient(135deg, ${T.ac}, #059669)`,
+                  color: (st.status === "running" || !st.keys[st.provider] || !task.trim()) ? T.txD : T.bg,
+                  border: "none", borderRadius: T.rs, fontSize: 12, fontWeight: 700,
+                  cursor: (st.status === "running" || !task.trim() || !st.keys[st.provider]) ? "not-allowed" : "pointer",
+                  letterSpacing: 2, transition: "all 0.2s", fontFamily: T.fn,
+                }}
+              >
+                {st.status === "running" ? "RUNNING..." : !st.keys[st.provider] ? "ADD API KEY \u2192 SETTINGS" : !task.trim() ? "ENTER A TASK" : "RUN PIPELINE"}
+              </button>
+              {st.status === "running" && (
+                <button
+                  onClick={cancelPipeline}
+                  aria-label="Cancel pipeline"
+                  style={{
+                    padding: "12px 16px", background: `${T.dn}15`, color: T.dn,
+                    border: `1px solid ${T.dn}33`, borderRadius: T.rs, fontSize: 11,
+                    fontWeight: 700, cursor: "pointer", fontFamily: T.fn, letterSpacing: 1,
+                    transition: "all 0.2s",
+                  }}
+                >
+                  CANCEL
+                </button>
+              )}
+            </div>
           </div>
         )}
 
-        {/* Metrics strip */}
-        {view !== "settings" && view !== "detail" && (
+        {/* Metrics strip — pipeline view only */}
+        {view === "pipeline" && (
           <>
             <MetricStrip metrics={st.metrics} />
             <TokenBar perAgent={st.metrics.perAgent} total={st.metrics.totalTok} />
@@ -838,7 +883,7 @@ export default function AgentOS() {
           <AgentDetail
             agent={AGENTS[selectedAgent]} state={st.agents[selectedAgent]}
             logs={st.logs} stream={st.streams[selectedAgent]}
-            st={st} dispatch={dispatch}
+            st={st} dispatch={dispatch} onBack={closeAgent}
           />
         )}
 
@@ -850,7 +895,7 @@ export default function AgentOS() {
                 <span style={{ fontSize: 11, fontWeight: 700, color: T.txM, letterSpacing: 1 }}>GLOBAL LOG</span>
                 <span style={{ fontSize: 9, color: T.txD, marginLeft: "auto" }}>{st.logs.length} entries</span>
               </div>
-              <LogList logs={st.logs} max={400} />
+              <LogList logs={st.logs} maxHeight={400} />
             </div>
             {st.bus.length > 0 && (
               <div style={{ marginTop: 10, background: T.s, borderRadius: T.r, border: `1px solid ${T.bd}`, overflow: "hidden" }}>
@@ -876,6 +921,9 @@ export default function AgentOS() {
         {/* Metrics */}
         {view === "metrics" && (
           <div style={{ marginTop: 12, animation: "slideUp .2s ease-out" }}>
+            <MetricStrip metrics={st.metrics} />
+            <TokenBar perAgent={st.metrics.perAgent} total={st.metrics.totalTok} />
+            <div style={{ height: 10 }} />
             <div style={{ background: T.s, borderRadius: T.r, border: `1px solid ${T.bd}`, padding: 14 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: T.txM, letterSpacing: 1, marginBottom: 10 }}>AGENT BREAKDOWN</div>
               {AGENTS_FULL.map(a => {
@@ -915,12 +963,18 @@ export default function AgentOS() {
         {nav.map(n => {
           const active = (view === n.id) || (view === "detail" && n.id === "pipeline");
           return (
-            <button key={n.id} onClick={() => { setView(n.id); if (n.id !== "detail") setSelectedAgent(null); }} style={{
-              flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 2,
-              background: "none", border: "none", cursor: "pointer",
-              color: active ? T.ac : T.txD, padding: "4px 0",
-              transition: "color 0.15s", fontFamily: T.fn,
-            }}>
+            <button
+              key={n.id}
+              aria-label={n.label}
+              aria-current={active ? "page" : undefined}
+              onClick={() => { setView(n.id); setSelectedAgent(null); }}
+              style={{
+                flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 2,
+                background: "none", border: "none", cursor: "pointer",
+                color: active ? T.ac : T.txD, padding: "4px 0",
+                transition: "color 0.15s", fontFamily: T.fn,
+              }}
+            >
               <span style={{ fontSize: 16, transition: "transform 0.15s", transform: active ? "scale(1.1)" : "scale(1)" }}>{n.icon}</span>
               <span style={{ fontSize: 8, fontWeight: active ? 700 : 400, letterSpacing: 0.5 }}>{n.label}</span>
               {active && <div style={{ width: 16, height: 2, borderRadius: 1, background: T.ac, marginTop: 1 }} />}
