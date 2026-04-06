@@ -1,10 +1,9 @@
 import { useState, useEffect, useRef, useReducer, useCallback } from "react";
 
 /* ═══════════════════════════════════════════════════════════════
-   AGENT OS v3 — Professional Mobile App
-   12 Agents (Phase 3) | Multi-Provider | Full Architecture
-   Files: src/core/theme.js, providers.js, agentBase.js
-          src/agents/01-04
+   AGENT OS v3 — Professional Multi-Agent Orchestration System
+   12 Agents | 10 Architectural Layers | Multi-Provider LLM
+   Providers: Anthropic, Groq, Gemini, OpenRouter
    ═══════════════════════════════════════════════════════════════ */
 
 // ══ INLINE: Theme ══
@@ -350,14 +349,14 @@ function Badge({ status, color }) {
   );
 }
 
-function LogList({ logs, max = 250, filter = null }) {
+function LogList({ logs, maxHeight = 250, limit = 200, filter = null }) {
   const ref = useRef(null);
   const filtered = filter ? logs.filter(l => l.from === filter) : logs;
   const display = filtered.slice(-100);
   useEffect(() => { ref.current && (ref.current.scrollTop = ref.current.scrollHeight); }, [display.length]);
   const col = { info: T.txM, success: T.ac, error: T.dn, warn: T.wn, data: "#A78BFA" };
   return (
-    <div ref={ref} style={{ maxHeight: max, overflowY: "auto", fontSize: 10, lineHeight: 1.7 }}>
+    <div ref={ref} style={{ maxHeight: maxHeight, overflowY: "auto", fontSize: 10, lineHeight: 1.7 }}>
       {display.length === 0 && <div style={{ padding: 16, color: T.txD, textAlign: "center", fontSize: 11 }}>No logs yet</div>}
       {display.map(e => (
         <div key={e.id} style={{ padding: "3px 10px", borderLeft: `2px solid ${col[e.type] || T.txD}33` }}>
@@ -370,24 +369,30 @@ function LogList({ logs, max = 250, filter = null }) {
   );
 }
 
-function StreamBox({ text, color }) {
+function StreamBox({ text, color, streaming = false }) {
   const ref = useRef(null);
   useEffect(() => { ref.current && (ref.current.scrollTop = ref.current.scrollHeight); }, [text]);
-  if (!text) return <div style={{ padding: 16, color: T.txD, fontSize: 11, textAlign: "center" }}>Awaiting output...</div>;
-  const lines = text.split("\n").slice(-20);
+  if (!text) return (
+    <div style={{ padding: 16, color: T.txD, fontSize: 11, textAlign: "center", fontFamily: T.fn }}>
+      Awaiting output...
+    </div>
+  );
+  const lines = text.split("\n");
   return (
     <pre ref={ref} style={{
       margin: 0, padding: 10, fontSize: 10, lineHeight: 1.6,
       color: color || T.tx, whiteSpace: "pre-wrap", wordBreak: "break-all",
-      maxHeight: 220, overflowY: "auto", background: `${T.bg}99`,
+      maxHeight: 260, overflowY: "auto", background: `${T.bg}99`, fontFamily: T.fn,
     }}>
       {lines.map((l, i) => (
-        <div key={i} style={{ opacity: i === lines.length - 1 ? 1 : 0.65 }}>
+        <div key={`line-${i}`} style={{ opacity: i < lines.length - 1 ? 0.75 : 1 }}>
           <span style={{ color: T.txD, marginRight: 6, fontSize: 8, userSelect: "none" }}>{String(i + 1).padStart(3)}</span>
           {l}
         </div>
       ))}
-      <span style={{ display: "inline-block", width: 6, height: 13, background: color || T.ac, animation: "blink 1s step-end infinite", verticalAlign: "middle" }} />
+      {streaming && (
+        <span style={{ display: "inline-block", width: 6, height: 13, background: color || T.ac, animation: "blink 1s step-end infinite", verticalAlign: "middle" }} />
+      )}
     </pre>
   );
 }
@@ -481,10 +486,10 @@ function AgentCard({ agent, state, stream, onTap }) {
 
       {/* Streaming preview */}
       {running && stream && (
-        <div style={{ marginTop: 8, padding: "4px 8px", background: `${T.bg}88`, borderRadius: T.rx, maxHeight: 36, overflow: "hidden" }}>
-          <pre style={{ margin: 0, fontSize: 8, color: agent.color, whiteSpace: "pre-wrap", opacity: 0.7 }}>
-            {stream.slice(-140)}
-            <span style={{ background: agent.color, width: 4, height: 9, display: "inline-block", animation: "blink .8s step-end infinite" }} />
+        <div style={{ marginTop: 8, padding: "4px 8px", background: `${T.bg}88`, borderRadius: T.rx, maxHeight: 40, overflow: "hidden" }}>
+          <pre style={{ margin: 0, fontSize: 8, color: agent.color, whiteSpace: "pre-wrap", wordBreak: "break-all", opacity: 0.8, fontFamily: T.fn }}>
+            {stream.slice(-160)}
+            <span style={{ background: agent.color, width: 4, height: 9, display: "inline-block", animation: "blink .8s step-end infinite", verticalAlign: "middle" }} />
           </pre>
         </div>
       )}
@@ -506,13 +511,15 @@ function AgentDetail({ agent, state, logs, stream, st, dispatch, onBack }) {
 
   const runSingle = async () => {
     if (!st.keys[st.provider]) return;
-    dispatch({ t: "AG", id: agent.id, d: { status: "running", error: null, tokens: 0, elapsed: 0, cost: 0 } });
-    dispatch({ t: "LOG", from: agent.id, lt: "info", text: "Starting single agent run..." });
+    dispatch({ t: "AG", id: agent.id, d: { status: "running", error: null, tokens: 0, elapsed: 0, cost: 0, output: "" } });
+    dispatch({ t: "LOG", from: agent.id, lt: "info", text: `Running ${agent.name} standalone...` });
     try {
-      const r = await callLLM(st, dispatch, agent.id, agent.sys, `Execute your role. Task context: general system build. Be concise and structured.`, agent.maxTok);
+      const r = await callLLM(st, dispatch, agent.id, agent.sys, `Execute your role as ${agent.role}. Provide a comprehensive structured response. Be concise and use the defined output format.`, agent.maxTok);
       dispatch({ t: "AG", id: agent.id, d: { status: "done", tokens: r.tok, elapsed: r.ms, cost: r.cost, output: r.text } });
+      dispatch({ t: "LOG", from: agent.id, lt: "success", text: `Completed in ${r.ms}ms | ${r.tok} tokens` });
     } catch (e) {
       dispatch({ t: "AG", id: agent.id, d: { status: "error", error: e.message } });
+      dispatch({ t: "LOG", from: agent.id, lt: "error", text: `Error: ${e.message}` });
     }
   };
 
@@ -596,8 +603,8 @@ function AgentDetail({ agent, state, logs, stream, st, dispatch, onBack }) {
 
         {/* Tab content */}
         <div>
-          {tab === "logs" && <LogList logs={agentLogs} max={260} />}
-          {tab === "output" && <StreamBox text={stream || state.output} color={agent.color} />}
+          {tab === "logs" && <LogList logs={agentLogs} maxHeight={260} />}
+          {tab === "output" && <StreamBox text={stream || state.output} color={agent.color} streaming={state.status === "running"} />}
           {tab === "hooks" && (
             <div style={{ padding: 12 }}>
               {agent.hooks.map(h => (
@@ -672,7 +679,9 @@ function SettingsView({ st, dispatch }) {
             type="password"
             value={st.keys[p.id]}
             onChange={e => dispatch({ t: "KEY", p: p.id, v: e.target.value })}
-            placeholder={`API key...`}
+            placeholder="API key..."
+            aria-label={`${p.name} API key`}
+            autoComplete="off"
             style={{
               flex: 1, background: T.s, border: `1px solid ${T.bd}`, borderRadius: T.rs,
               color: T.tx, padding: "8px 10px", fontSize: 11, outline: "none", fontFamily: T.fn,
@@ -690,6 +699,7 @@ function SettingsView({ st, dispatch }) {
           <div>Model: <b style={{ color: T.tx }}>{st.model}</b></div>
           <div>Total hooks: <b style={{ color: T.tx }}>{AGENTS_FULL.reduce((s, a) => s + a.hooks.length, 0)}</b></div>
           <div>Total skills: <b style={{ color: T.tx }}>{AGENTS_FULL.reduce((s, a) => s + a.skills.length, 0)}</b></div>
+          <div>Total tools: <b style={{ color: T.tx }}>{AGENTS_FULL.reduce((s, a) => s + a.tools.length, 0)}</b></div>
         </div>
       </div>
     </div>
@@ -940,16 +950,27 @@ export default function AgentOS() {
   const [task, setTask] = useState("");
   const [view, setView] = useState("pipeline"); // pipeline | detail | logs | metrics | settings
   const [selectedAgent, setSelectedAgent] = useState(null);
+  const cancelRef = useRef(false);
 
-  const openAgent = (id) => { setSelectedAgent(id); setView("detail"); };
+  const openAgent = useCallback((id) => { setSelectedAgent(id); setView("detail"); }, []);
+  const closeAgent = useCallback(() => { setSelectedAgent(null); setView("pipeline"); }, []);
+  const cancelPipeline = useCallback(() => { cancelRef.current = true; }, []);
 
-  const runPipeline = async () => {
+  const runPipeline = useCallback(async () => {
     if (!task.trim() || !st.keys[st.provider]) return;
+    cancelRef.current = false;
     dispatch({ t: "RST" });
     dispatch({ t: "ST", v: "running" });
+    // Mark all agents as queued before starting
+    AGENTS_FULL.forEach(a => dispatch({ t: "AG", id: a.id, d: { status: "queued" } }));
 
     let prevOutput = "";
     for (const agent of AGENTS_FULL) {
+      if (cancelRef.current) {
+        dispatch({ t: "ST", v: "idle" });
+        dispatch({ t: "LOG", from: agent.id, lt: "warn", text: "Pipeline cancelled by user." });
+        break;
+      }
       dispatch({ t: "AG", id: agent.id, d: { status: "running", error: null } });
       dispatch({ t: "LOG", from: agent.id, lt: "info", text: "Starting..." });
       try {
@@ -1026,7 +1047,7 @@ export default function AgentOS() {
             padding: "2px 7px", borderRadius: 10, fontWeight: 600,
             border: `1px solid ${PROVIDERS[st.provider]?.color}22`,
           }}>
-            {PROVIDERS[st.provider]?.name} / {st.model.split("/").pop().split("-").slice(0, 2).join(" ")}
+            {PROVIDERS[st.provider]?.name} / {PROVIDERS[st.provider]?.models.find(m => m.id === st.model)?.label || st.model.split("/").pop()}
           </span>
           <div style={{ flex: 1 }} />
           <Badge status={st.status} />
@@ -1041,8 +1062,8 @@ export default function AgentOS() {
 
       {/* ══ CONTENT ══ */}
       <div style={{ padding: "12px 14px 80px" }}>
-        {/* Task input */}
-        {view !== "settings" && view !== "detail" && view !== "chat" && (
+        {/* Task input — pipeline view only */}
+        {view === "pipeline" && (
           <div style={{ marginBottom: 12 }}>
             <textarea
               value={task} onChange={e => setTask(e.target.value)}
@@ -1084,8 +1105,8 @@ export default function AgentOS() {
           </div>
         )}
 
-        {/* Metrics strip */}
-        {view !== "settings" && view !== "detail" && view !== "chat" && (
+        {/* Metrics strip — pipeline view only */}
+        {view === "pipeline" && (
           <>
             <MetricStrip metrics={st.metrics} />
             <TokenBar perAgent={st.metrics.perAgent} total={st.metrics.totalTok} />
@@ -1119,7 +1140,7 @@ export default function AgentOS() {
                 <span style={{ fontSize: 11, fontWeight: 700, color: T.txM, letterSpacing: 1 }}>GLOBAL LOG</span>
                 <span style={{ fontSize: 9, color: T.txD, marginLeft: "auto" }}>{st.logs.length} entries</span>
               </div>
-              <LogList logs={st.logs} max={400} />
+              <LogList logs={st.logs} maxHeight={400} />
             </div>
             {st.bus.length > 0 && (
               <div style={{ marginTop: 10, background: T.s, borderRadius: T.r, border: `1px solid ${T.bd}`, overflow: "hidden" }}>
@@ -1145,6 +1166,9 @@ export default function AgentOS() {
         {/* Metrics */}
         {view === "metrics" && (
           <div style={{ marginTop: 12, animation: "slideUp .2s ease-out" }}>
+            <MetricStrip metrics={st.metrics} />
+            <TokenBar perAgent={st.metrics.perAgent} total={st.metrics.totalTok} />
+            <div style={{ height: 10 }} />
             <div style={{ background: T.s, borderRadius: T.r, border: `1px solid ${T.bd}`, padding: 14 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: T.txM, letterSpacing: 1, marginBottom: 10 }}>AGENT BREAKDOWN</div>
               {AGENTS_FULL.map(a => {
