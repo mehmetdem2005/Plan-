@@ -697,6 +697,242 @@ function SettingsView({ st, dispatch }) {
 }
 
 // ═════════════════════════════════
+// ═════ CHAT VIEW ════════════════
+// ═════════════════════════════════
+const CHAT_STARTERS = [
+  { icon: "\u26A1", label: "Fikir üret", prompt: "Bu konuda yaratıcı ve özgün fikirler üret: " },
+  { icon: "\u25B6", label: "Yol haritası", prompt: "Bu konu için adım adım bir yol haritası çıkar: " },
+  { icon: "\u25A1", label: "Artı / Eksi", prompt: "Bu konunun avantaj ve dezavantajlarını karşılaştır: " },
+  { icon: "\u25CA", label: "Alternatifler", prompt: "Bu yaklaşıma güçlü alternatifler öner: " },
+  { icon: "\u25B8", label: "Kritik sorular", prompt: "Bu konuyla ilgili düşündürücü kritik sorular listele: " },
+  { icon: "\u25C6", label: "Özet çıkar", prompt: "Şu ana kadar konuştuklarımızı maddeler halinde özetle." },
+];
+
+function ChatView({ st }) {
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [streamText, setStreamText] = useState("");
+  const bottomRef = useRef(null);
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages.length, streamText]);
+
+  const sendMessage = async (text) => {
+    const trimmed = text.trim();
+    if (!trimmed || loading || !st.keys[st.provider]) return;
+
+    const userMsg = { id: gid(), role: "user", content: trimmed };
+    const history = [...messages, userMsg];
+    setMessages(history);
+    setInput("");
+    setStreamText("");
+    setLoading(true);
+
+    // Auto-resize textarea back to 1 row
+    if (inputRef.current) { inputRef.current.style.height = "auto"; }
+
+    try {
+      const prov = PROVIDERS[st.provider];
+      const key = st.keys[st.provider];
+      const sys = "Sen yaratıcı ve analitik bir beyin fırtınası asistanısın. Fikirleri net, yapılandırılmış ve pratik şekilde sun. Kullanıcının dilinde (Türkçe veya İngilizce) yanıt ver. Markdown kullanabilirsin.";
+      const apiMsgs = history.map(m => ({ role: m.role, content: m.content }));
+
+      const req = prov.build(key, st.model, sys, apiMsgs, 1500);
+      const res = await fetch(req.url, { method: "POST", headers: req.h, body: JSON.stringify(req.b) });
+      if (!res.ok) { const e = await res.text(); throw new Error(`${res.status}: ${e.slice(0, 120)}`); }
+
+      const data = await res.json();
+      const parsed = prov.parse(data);
+
+      // Streaming simulation
+      const chars = parsed.text.split("");
+      let buf = "";
+      const ch = Math.max(3, Math.floor(chars.length / 35));
+      for (let i = 0; i < chars.length; i += ch) {
+        buf += chars.slice(i, i + ch).join("");
+        setStreamText(buf);
+        await sleep(14);
+      }
+      setStreamText("");
+      setMessages(prev => [...prev, { id: gid(), role: "assistant", content: parsed.text }]);
+    } catch (e) {
+      setMessages(prev => [...prev, { id: gid(), role: "assistant", content: e.message, error: true }]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const hasMessages = messages.length > 0 || loading;
+  const canSend = !!input.trim() && !loading && !!st.keys[st.provider];
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", minHeight: "calc(100vh - 148px)", animation: "slideUp .2s ease-out" }}>
+
+      {/* ── Welcome / Empty state ── */}
+      {!hasMessages && (
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "24px 0 16px", gap: 24 }}>
+          <div style={{ textAlign: "center" }}>
+            <div style={{ fontSize: 36, marginBottom: 10 }}>\u26A1</div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: T.tx, fontFamily: T.fd, marginBottom: 6 }}>Beyin Fırtınası</div>
+            <div style={{ fontSize: 12, color: T.txM, lineHeight: 1.6 }}>
+              {!st.keys[st.provider]
+                ? "Başlamak için ayarlardan API key girin."
+                : "Fikirlerini geliştirmek için ne düşünüyorsun?"}
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, width: "100%" }}>
+            {CHAT_STARTERS.map(s => (
+              <button key={s.label} className="chat-starter" onClick={() => { setInput(s.prompt); inputRef.current?.focus(); }} style={{
+                padding: "12px 12px", background: T.s, border: `1px solid ${T.bd}`,
+                borderRadius: T.r, cursor: "pointer", textAlign: "left",
+                transition: "all 0.15s", fontFamily: T.fn,
+              }}>
+                <div style={{ fontSize: 18, marginBottom: 5, color: T.ac }}>{s.icon}</div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: T.tx }}>{s.label}</div>
+                <div style={{ fontSize: 9, color: T.txM, marginTop: 2, lineHeight: 1.4 }}>{s.prompt.slice(0, 28)}…</div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Message list ── */}
+      {hasMessages && (
+        <div style={{ flex: 1, paddingTop: 8, paddingBottom: 8, display: "flex", flexDirection: "column", gap: 10 }}>
+          {messages.map(m => (
+            <div key={m.id} style={{ display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start", alignItems: "flex-end", gap: 8 }}>
+              {m.role === "assistant" && (
+                <div style={{
+                  width: 28, height: 28, borderRadius: "50%", flexShrink: 0,
+                  background: `${T.ac}15`, border: `1px solid ${T.ac}33`,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontSize: 13, color: T.ac,
+                }}>\u26A1</div>
+              )}
+              <div style={{
+                maxWidth: "78%", padding: "10px 14px",
+                borderRadius: m.role === "user" ? "18px 18px 4px 18px" : "18px 18px 18px 4px",
+                background: m.role === "user" ? `${T.ac}15` : T.s,
+                border: `1px solid ${m.role === "user" ? T.ac + "30" : T.bd}`,
+                fontSize: 12, color: m.error ? T.dn : T.tx, lineHeight: 1.7,
+                whiteSpace: "pre-wrap", wordBreak: "break-word",
+              }}>
+                {m.content}
+              </div>
+              {m.role === "user" && (
+                <div style={{
+                  width: 28, height: 28, borderRadius: "50%", flexShrink: 0,
+                  background: T.s2, border: `1px solid ${T.bd}`,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontSize: 11, color: T.txM,
+                }}>\u25A4</div>
+              )}
+            </div>
+          ))}
+
+          {/* Streaming bubble */}
+          {loading && (
+            <div style={{ display: "flex", justifyContent: "flex-start", alignItems: "flex-end", gap: 8 }}>
+              <div style={{
+                width: 28, height: 28, borderRadius: "50%", flexShrink: 0,
+                background: `${T.ac}15`, border: `1px solid ${T.ac}33`,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontSize: 13, color: T.ac,
+              }}>\u26A1</div>
+              <div style={{
+                maxWidth: "78%", padding: "10px 14px",
+                borderRadius: "18px 18px 18px 4px",
+                background: T.s, border: `1px solid ${T.bd}`,
+                fontSize: 12, color: T.tx, lineHeight: 1.7,
+                whiteSpace: "pre-wrap", wordBreak: "break-word", minWidth: 48,
+              }}>
+                {streamText || <span style={{ color: T.txD }}>···</span>}
+                <span style={{
+                  display: "inline-block", width: 7, height: 13, marginLeft: 2,
+                  background: T.ac, animation: "blink 1s step-end infinite", verticalAlign: "middle", borderRadius: 2,
+                }} />
+              </div>
+            </div>
+          )}
+          <div ref={bottomRef} />
+        </div>
+      )}
+
+      {/* ── Quick-action chips (shown during conversation) ── */}
+      {hasMessages && !loading && (
+        <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 10, paddingTop: 2 }}>
+          {CHAT_STARTERS.slice(0, 5).map(s => (
+            <button key={s.label} className="chat-chip" onClick={() => { setInput(s.prompt); inputRef.current?.focus(); }} style={{
+              padding: "5px 11px", background: T.s, border: `1px solid ${T.bd}`,
+              borderRadius: 20, cursor: "pointer", whiteSpace: "nowrap",
+              fontSize: 10, color: T.txM, fontFamily: T.fn, flexShrink: 0,
+              transition: "all 0.15s",
+            }}>{s.icon} {s.label}</button>
+          ))}
+        </div>
+      )}
+
+      {/* ── Input bar ── */}
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-end", borderTop: `1px solid ${T.bd}`, paddingTop: 10 }}>
+        <textarea
+          ref={inputRef}
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(input); }
+          }}
+          onInput={e => {
+            e.target.style.height = "auto";
+            e.target.style.height = Math.min(e.target.scrollHeight, 110) + "px";
+          }}
+          placeholder={!st.keys[st.provider] ? "Önce ayarlardan API key girin..." : "Bir şey yaz... (Enter ile gönder, Shift+Enter yeni satır)"}
+          disabled={loading || !st.keys[st.provider]}
+          rows={1}
+          aria-label="Chat message input"
+          style={{
+            flex: 1, background: T.s, border: `1px solid ${T.bd}`, borderRadius: 20,
+            color: T.tx, padding: "10px 14px", fontSize: 12, resize: "none", outline: "none",
+            lineHeight: 1.5, transition: "border-color 0.2s", fontFamily: T.fn,
+            maxHeight: 110, overflowY: "auto",
+          }}
+          onFocus={e => e.target.style.borderColor = T.ac}
+          onBlur={e => e.target.style.borderColor = T.bd}
+        />
+        <button
+          onClick={() => sendMessage(input)}
+          disabled={!canSend}
+          aria-label="Send"
+          style={{
+            width: 42, height: 42, borderRadius: "50%", flexShrink: 0, border: "none",
+            background: canSend ? `linear-gradient(135deg, ${T.ac}, #059669)` : T.s2,
+            cursor: canSend ? "pointer" : "not-allowed",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: 18, transition: "all 0.2s",
+          }}
+        >
+          <span style={{ color: canSend ? T.bg : T.txD, lineHeight: 1 }}>\u2191</span>
+        </button>
+      </div>
+
+      {/* Clear chat */}
+      {hasMessages && !loading && (
+        <button onClick={() => setMessages([])} style={{
+          marginTop: 8, background: "none", border: "none", color: T.txD,
+          fontSize: 10, cursor: "pointer", fontFamily: T.fn, padding: "4px 0",
+          transition: "color 0.15s",
+        }}>
+          Sohbeti temizle
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ═════════════════════════════════
 // ═════ MAIN APP ═════════════════
 // ═════════════════════════════════
 export default function AgentOS() {
@@ -737,6 +973,7 @@ export default function AgentOS() {
 
   const nav = [
     { id: "pipeline", label: "Pipeline", icon: "\u25C8" },
+    { id: "chat", label: "Chat", icon: "\u26A1" },
     { id: "logs", label: "Logs", icon: "\u25CE" },
     { id: "metrics", label: "Stats", icon: "\u25C9" },
     { id: "settings", label: "Settings", icon: "\u2699" },
@@ -763,6 +1000,8 @@ export default function AgentOS() {
         textarea:disabled { opacity: 0.5; cursor: not-allowed; }
         button:focus-visible { outline: 2px solid ${T.ac}; outline-offset: 2px; }
         input:focus-visible { outline: 2px solid ${T.ac}; outline-offset: 1px; }
+        .chat-starter:hover { border-color: ${T.ac}55 !important; background: ${T.s2} !important; }
+        .chat-chip:hover { border-color: ${T.ac}44 !important; color: ${T.tx} !important; }
       `}</style>
 
       {/* ══ HEADER ══ */}
@@ -803,7 +1042,7 @@ export default function AgentOS() {
       {/* ══ CONTENT ══ */}
       <div style={{ padding: "12px 14px 80px" }}>
         {/* Task input */}
-        {view !== "settings" && view !== "detail" && (
+        {view !== "settings" && view !== "detail" && view !== "chat" && (
           <div style={{ marginBottom: 12 }}>
             <textarea
               value={task} onChange={e => setTask(e.target.value)}
@@ -846,7 +1085,7 @@ export default function AgentOS() {
         )}
 
         {/* Metrics strip */}
-        {view !== "settings" && view !== "detail" && (
+        {view !== "settings" && view !== "detail" && view !== "chat" && (
           <>
             <MetricStrip metrics={st.metrics} />
             <TokenBar perAgent={st.metrics.perAgent} total={st.metrics.totalTok} />
@@ -928,6 +1167,9 @@ export default function AgentOS() {
             </div>
           </div>
         )}
+
+        {/* Chat */}
+        {view === "chat" && <ChatView st={st} />}
 
         {/* Settings */}
         {view === "settings" && <SettingsView st={st} dispatch={dispatch} />}
