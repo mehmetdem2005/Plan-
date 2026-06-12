@@ -240,6 +240,22 @@ const AGENTS_FULL = [
 
 const AGENTS = Object.fromEntries(AGENTS_FULL.map(a => [a.id, a]));
 
+// ══ Per-agent proactive opening questions ══
+const AGENT_OPENINGS = {
+  architect_agent: "Merhaba! Sistem mimarisini tasarlamadan önce projeyi daha iyi anlamam gerekiyor:\n\n1. Tahmini kullanıcı sayısı ve büyüme hedefi nedir?\n2. Monolitik mi yoksa mikroservis mi tercih edersiniz?\n3. Bulut sağlayıcısı tercihiniz nedir (AWS, GCP, Azure)?\n4. Başka özel kısıtlamalar veya kurallar var mı?",
+  ui_agent: "Merhaba! UI mimarisini planlamadan önce:\n\n1. Hedef platform: web, mobil, yoksa ikisi birden mi?\n2. Mevcut bir tasarım sistemi veya marka kılavuzu var mı?\n3. Karanlık mod ve erişilebilirlik zorunlu mu?\n4. Hangi framework tercih edersiniz (React, Vue, Svelte)?",
+  mobile_agent: "Merhaba! Mobil uygulamayı tasarlamadan önce:\n\n1. iOS, Android yoksa ikisi birden mi hedefliyorsunuz?\n2. React Native mi, Flutter mi, yoksa native mi?\n3. Offline çalışma gerekiyor mu?\n4. Push bildirim ve deep link gereksinimleri neler?",
+  auth_agent: "Merhaba! Güvenlik mimarisini tasarlamadan önce:\n\n1. Kimlik doğrulama yöntemi: JWT, session-based, OAuth2?\n2. Social login (Google, GitHub vb.) gerekiyor mu?\n3. MFA zorunlu mu, opsiyonel mi?\n4. RBAC mi, ABAC mi? Kullanıcı rolleri neler?",
+  entity_agent: "Merhaba! Domain modellerini tasarlamadan önce:\n\n1. Sistemin ana iş varlıkları (entity) nelerdir?\n2. Aggregate boundary'ler için özel iş kuralları var mı?\n3. Event sourcing kullanılacak mı?\n4. Multi-tenant mimari gerekiyor mu?",
+  usecase_agent: "Merhaba! Use case'leri planlamadan önce:\n\n1. En kritik iş akışları hangileri?\n2. Hangi operasyonlar idempotent olmalı?\n3. Bulk operasyon gereksinimleri var mı?\n4. Asenkron / arka plan işlemleri için gereksinimler neler?",
+  repo_agent: "Merhaba! Veri erişim katmanını tasarlamadan önce:\n\n1. Birincil veritabanı nedir (PostgreSQL, MySQL, MongoDB)?\n2. Caching stratejisi: Redis mi, in-memory mi?\n3. Full-text search gerekiyor mu?\n4. Beklenen veri hacmi ve sorgu yoğunluğu nedir?",
+  logger_agent: "Merhaba! Loglama altyapısını kurmadan önce:\n\n1. Log toplama platformu: ELK, Datadog, CloudWatch?\n2. Hangi log seviyeleri production'da aktif olacak?\n3. Hangi alanlar PII maskelemeye ihtiyaç duyuyor?\n4. Alert threshold'ları için SLA/SLO hedefleriniz neler?",
+  tester_agent: "Merhaba! Test stratejisini belirlemeden önce:\n\n1. Hedef kod coverage yüzdesi nedir?\n2. E2E testler için Playwright mı, Cypress mi?\n3. Contract testing kullanılacak mı?\n4. CI/CD pipeline'ında zorunlu test aşamaları neler?",
+  notification_agent: "Merhaba! Bildirim sistemini planlamadan önce:\n\n1. Hangi kanallar gerekiyor: email, SMS, push, in-app?\n2. Email sağlayıcısı tercihiniz (SendGrid, SES, Mailgun)?\n3. Kullanıcılar bildirim tercihlerini yönetebilecek mi?\n4. Toplu ve zamanlanmış bildirim gereksinimleri var mı?",
+  eventbus_agent: "Merhaba! Event-driven mimariyi planlamadan önce:\n\n1. Message broker: Kafka mı, RabbitMQ mu, SQS mu?\n2. Event sourcing kullanılacak mı?\n3. Saga pattern için orchestration mı, choreography mi?\n4. Dead letter queue stratejisi nasıl olacak?",
+  database_agent: "Merhaba! Veritabanı altyapısını tasarlamadan önce:\n\n1. Birincil DB motoru: PostgreSQL, MySQL, MongoDB?\n2. Replikasyon ve yüksek erişilebilirlik gereksinimleri neler?\n3. Partitioning / sharding gerekiyor mu?\n4. Veri tutma süresi ve arşivleme politikası nedir?",
+};
+
 // ══ HELPERS ══
 let _u = 0;
 const gid = () => `${Date.now()}-${++_u}`;
@@ -257,6 +273,7 @@ const init = {
   bus: [],
   metrics: { totalTok: 0, totalMs: 0, totalCost: 0, perAgent: {} },
   streams: {},
+  chatHistories: {},
 };
 
 function red(st, a) {
@@ -273,7 +290,16 @@ function red(st, a) {
       const p = { ...st.metrics.perAgent }; p[a.id] = (p[a.id] || 0) + a.tok;
       return { ...st, metrics: { totalTok: st.metrics.totalTok + a.tok, totalMs: st.metrics.totalMs + a.ms, totalCost: st.metrics.totalCost + a.cost, perAgent: p } };
     }
-    case "RST": return { ...init, keys: st.keys, provider: st.provider, model: st.model };
+    case "AGENT_CHAT": {
+      const h = { ...st.chatHistories };
+      h[a.agentId] = [...(h[a.agentId] || []), a.msg];
+      return { ...st, chatHistories: h };
+    }
+    case "CLEAR_CHAT": {
+      const h = { ...st.chatHistories }; h[a.agentId] = [];
+      return { ...st, chatHistories: h };
+    }
+    case "RST": return { ...init, keys: st.keys, provider: st.provider, model: st.model, chatHistories: st.chatHistories };
     default: return st;
   }
 }
@@ -429,6 +455,148 @@ function TokenBar({ perAgent, total }) {
   );
 }
 
+// ══ Shared Chat Bubble list ══
+function ChatBubbles({ history, loading, streamText, agentColor, agentIcon, bottomRef }) {
+  return (
+    <div style={{ flex: 1, overflowY: "auto", padding: "12px 14px 8px", display: "flex", flexDirection: "column", gap: 10, maxHeight: 340 }}>
+      {history.length === 0 && !loading && (
+        <div style={{ textAlign: "center", padding: "24px 0", color: T.txD, fontSize: 11 }}>Sohbet yükleniyor…</div>
+      )}
+      {history.map(m => (
+        <div key={m.id} style={{ display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start", alignItems: "flex-end", gap: 7 }}>
+          {m.role === "assistant" && (
+            <div style={{ width: 26, height: 26, borderRadius: "50%", flexShrink: 0, background: `${agentColor}15`, border: `1px solid ${agentColor}33`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: agentColor }}>{agentIcon}</div>
+          )}
+          <div style={{
+            maxWidth: "82%", padding: "9px 13px",
+            borderRadius: m.role === "user" ? "16px 16px 4px 16px" : "16px 16px 16px 4px",
+            background: m.role === "user" ? `${T.ac}12` : `${agentColor}09`,
+            border: `1px solid ${m.role === "user" ? T.ac + "28" : agentColor + "22"}`,
+            fontSize: 11, color: m.error ? T.dn : T.tx, lineHeight: 1.7,
+            whiteSpace: "pre-wrap", wordBreak: "break-word",
+          }}>
+            {m.content}
+            {m.time && <div style={{ fontSize: 8, color: T.txD, marginTop: 3 }}>{m.time}</div>}
+          </div>
+          {m.role === "user" && (
+            <div style={{ width: 26, height: 26, borderRadius: "50%", flexShrink: 0, background: T.s2, border: `1px solid ${T.bd}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: T.txM }}>U</div>
+          )}
+        </div>
+      ))}
+      {loading && (
+        <div style={{ display: "flex", justifyContent: "flex-start", alignItems: "flex-end", gap: 7 }}>
+          <div style={{ width: 26, height: 26, borderRadius: "50%", flexShrink: 0, background: `${agentColor}15`, border: `1px solid ${agentColor}33`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: agentColor }}>{agentIcon}</div>
+          <div style={{ maxWidth: "82%", padding: "9px 13px", borderRadius: "16px 16px 16px 4px", background: `${agentColor}09`, border: `1px solid ${agentColor}22`, fontSize: 11, color: T.tx, lineHeight: 1.7, whiteSpace: "pre-wrap", wordBreak: "break-word", minWidth: 52 }}>
+            {streamText || <span style={{ color: T.txD }}>···</span>}
+            <span style={{ display: "inline-block", width: 6, height: 11, marginLeft: 2, background: agentColor, animation: "blink 1s step-end infinite", verticalAlign: "middle", borderRadius: 2 }} />
+          </div>
+        </div>
+      )}
+      <div ref={bottomRef} />
+    </div>
+  );
+}
+
+// ══ Per-agent chat tab ══
+function AgentChatTab({ agent, st, dispatch }) {
+  const history = (st.chatHistories || {})[agent.id] || [];
+  const [streamText, setStreamText] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [input, setInput] = useState("");
+  const inputRef = useRef(null);
+  const bottomRef = useRef(null);
+  const openingInjected = useRef(false);
+
+  // Inject proactive opening question once, on first mount with empty history
+  useEffect(() => {
+    if (!openingInjected.current && history.length === 0 && AGENT_OPENINGS[agent.id]) {
+      openingInjected.current = true;
+      dispatch({ t: "AGENT_CHAT", agentId: agent.id, msg: { id: gid(), role: "assistant", content: AGENT_OPENINGS[agent.id], time: ts() } });
+    }
+  }, []); // eslint-disable-line
+
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [history.length, streamText]);
+
+  const send = async (text) => {
+    const trimmed = text.trim();
+    if (!trimmed || loading || !st.keys[st.provider]) return;
+    const userMsg = { id: gid(), role: "user", content: trimmed, time: ts() };
+    dispatch({ t: "AGENT_CHAT", agentId: agent.id, msg: userMsg });
+    setInput("");
+    if (inputRef.current) inputRef.current.style.height = "auto";
+    setStreamText("");
+    setLoading(true);
+
+    try {
+      const prov = PROVIDERS[st.provider];
+      const allHistory = [...history, userMsg];
+      const apiMsgs = allHistory.map(m => ({ role: m.role === "assistant" ? "assistant" : "user", content: m.content }));
+      const sys = agent.sys + "\n\nBu bir interaktif sohbettir. Kullanıcıyla doğal bir diyalog yürüt, gereksinimleri anla, sorular sor ve önerilerde bulun. Türkçe veya kullanıcının dilinde yanıt ver.";
+      const req = prov.build(st.keys[st.provider], st.model, sys, apiMsgs, 1200);
+      const res = await fetch(req.url, { method: "POST", headers: req.h, body: JSON.stringify(req.b) });
+      if (!res.ok) { const e = await res.text(); throw new Error(`${res.status}: ${e.slice(0, 120)}`); }
+      const data = await res.json();
+      const parsed = prov.parse(data);
+
+      const chars = parsed.text.split("");
+      let buf = "";
+      const ch = Math.max(3, Math.floor(chars.length / 35));
+      for (let i = 0; i < chars.length; i += ch) {
+        buf += chars.slice(i, i + ch).join("");
+        setStreamText(buf);
+        await sleep(14);
+      }
+      setStreamText("");
+      dispatch({ t: "AGENT_CHAT", agentId: agent.id, msg: { id: gid(), role: "assistant", content: parsed.text, time: ts() } });
+    } catch (e) {
+      dispatch({ t: "AGENT_CHAT", agentId: agent.id, msg: { id: gid(), role: "assistant", content: `Hata: ${e.message}`, time: ts(), error: true } });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const canSend = !!input.trim() && !loading && !!st.keys[st.provider];
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column" }}>
+      <ChatBubbles history={history} loading={loading} streamText={streamText} agentColor={agent.color} agentIcon={agent.icon} bottomRef={bottomRef} />
+
+      <div style={{ borderTop: `1px solid ${T.bd}`, padding: "8px 12px 10px", display: "flex", gap: 8, alignItems: "flex-end" }}>
+        <textarea
+          ref={inputRef}
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(input); } }}
+          onInput={e => { e.target.style.height = "auto"; e.target.style.height = Math.min(e.target.scrollHeight, 90) + "px"; }}
+          placeholder={!st.keys[st.provider] ? "API key gerekli..." : `${agent.name} ile konuş… (Enter gönder)`}
+          disabled={loading || !st.keys[st.provider]}
+          rows={1}
+          style={{
+            flex: 1, background: T.s2, border: `1px solid ${T.bd}`, borderRadius: 16,
+            color: T.tx, padding: "8px 12px", fontSize: 11, resize: "none", outline: "none",
+            lineHeight: 1.45, transition: "border-color 0.2s", fontFamily: T.fn, maxHeight: 90,
+          }}
+          onFocus={e => e.target.style.borderColor = agent.color}
+          onBlur={e => e.target.style.borderColor = T.bd}
+        />
+        <button onClick={() => send(input)} disabled={!canSend} aria-label="Gönder" style={{
+          width: 36, height: 36, borderRadius: "50%", flexShrink: 0, border: "none",
+          background: canSend ? agent.color : T.s2, cursor: canSend ? "pointer" : "not-allowed",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          fontSize: 15, color: canSend ? T.bg : T.txD, transition: "all 0.2s",
+        }}>↑</button>
+      </div>
+
+      {history.length > 1 && !loading && (
+        <button onClick={() => dispatch({ t: "CLEAR_CHAT", agentId: agent.id })} style={{
+          margin: "0 12px 8px", background: "none", border: "none", color: T.txD, fontSize: 9,
+          cursor: "pointer", fontFamily: T.fn, padding: "2px 0", textAlign: "left", transition: "color 0.15s",
+        }}>Sohbeti temizle</button>
+      )}
+    </div>
+  );
+}
+
 // ══ Agent Card (Pipeline view) ══
 function AgentCard({ agent, state, stream, onTap }) {
   const running = state.status === "running";
@@ -524,11 +692,12 @@ function AgentDetail({ agent, state, logs, stream, st, dispatch, onBack }) {
   };
 
   const tabs = [
-    { id: "logs", label: "Logs" },
+    { id: "chat", label: "Chat ⚡" },
     { id: "output", label: "Output" },
-    { id: "hooks", label: `Hooks (${agent.hooks.length})` },
-    { id: "skills", label: `Skills (${agent.skills.length})` },
-    { id: "tools", label: `Tools (${agent.tools.length})` },
+    { id: "logs", label: "Logs" },
+    { id: "skills", label: `Skills` },
+    { id: "hooks", label: `Hooks` },
+    { id: "tools", label: `Tools` },
     { id: "config", label: "Config" },
   ];
 
@@ -603,6 +772,7 @@ function AgentDetail({ agent, state, logs, stream, st, dispatch, onBack }) {
 
         {/* Tab content */}
         <div>
+          {tab === "chat" && <AgentChatTab agent={agent} st={st} dispatch={dispatch} />}
           {tab === "logs" && <LogList logs={agentLogs} maxHeight={260} />}
           {tab === "output" && <StreamBox text={stream || state.output} color={agent.color} streaming={state.status === "running"} />}
           {tab === "hooks" && (
@@ -706,238 +876,258 @@ function SettingsView({ st, dispatch }) {
   );
 }
 
-// ═════════════════════════════════
-// ═════ CHAT VIEW ════════════════
-// ═════════════════════════════════
-const CHAT_STARTERS = [
-  { icon: "\u26A1", label: "Fikir üret", prompt: "Bu konuda yaratıcı ve özgün fikirler üret: " },
-  { icon: "\u25B6", label: "Yol haritası", prompt: "Bu konu için adım adım bir yol haritası çıkar: " },
-  { icon: "\u25A1", label: "Artı / Eksi", prompt: "Bu konunun avantaj ve dezavantajlarını karşılaştır: " },
-  { icon: "\u25CA", label: "Alternatifler", prompt: "Bu yaklaşıma güçlü alternatifler öner: " },
-  { icon: "\u25B8", label: "Kritik sorular", prompt: "Bu konuyla ilgili düşündürücü kritik sorular listele: " },
-  { icon: "\u25C6", label: "Özet çıkar", prompt: "Şu ana kadar konuştuklarımızı maddeler halinde özetle." },
-];
 
-function ChatView({ st }) {
-  const [messages, setMessages] = useState([]);
-  const [input, setInput] = useState("");
+// ═════════════════════════════════
+// ═════ PLANNER VIEW ═════════════
+// ═════════════════════════════════
+const PLANNER_COLOR = "#C084FC";
+const PLANNER_SYS = `Sen bir yazılım projesi planlama uzmanısın.
+
+AŞAMA 1 — Soru Sor: Kullanıcının proje açıklamasını aldıktan sonra projeyi doğru planlamak için 4-5 kritik soru yönelt. Madde madde, numara ile listele.
+
+AŞAMA 2 — Plan Çıkar: Kullanıcının cevaplarına göre SADECE aşağıdaki JSON formatını döndür, başka hiçbir şey yazma:
+{"title":"...","summary":"...","techStack":{"frontend":"...","backend":"...","database":"...","auth":"...","infra":"..."},"phases":[{"name":"...","duration":"...","tasks":["..."]}],"risks":[{"risk":"...","mitigation":"..."}],"estimatedTime":"..."}`;
+
+function PlannerView({ st, onRunWithPlan }) {
+  const [phase, setPhase] = useState("idle");
+  const [planTask, setPlanTask] = useState("");
+  const [questions, setQuestions] = useState("");
+  const [answers, setAnswers] = useState("");
+  const [plan, setPlan] = useState(null);
   const [loading, setLoading] = useState(false);
   const [streamText, setStreamText] = useState("");
   const bottomRef = useRef(null);
-  const inputRef = useRef(null);
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.length, streamText]);
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [streamText, phase]);
 
-  const sendMessage = async (text) => {
-    const trimmed = text.trim();
-    if (!trimmed || loading || !st.keys[st.provider]) return;
-
-    const userMsg = { id: gid(), role: "user", content: trimmed };
-    const history = [...messages, userMsg];
-    setMessages(history);
-    setInput("");
-    setStreamText("");
-    setLoading(true);
-
-    // Auto-resize textarea back to 1 row
-    if (inputRef.current) { inputRef.current.style.height = "auto"; }
-
-    try {
-      const prov = PROVIDERS[st.provider];
-      const key = st.keys[st.provider];
-      const sys = "Sen yaratıcı ve analitik bir beyin fırtınası asistanısın. Fikirleri net, yapılandırılmış ve pratik şekilde sun. Kullanıcının dilinde (Türkçe veya İngilizce) yanıt ver. Markdown kullanabilirsin.";
-      const apiMsgs = history.map(m => ({ role: m.role, content: m.content }));
-
-      const req = prov.build(key, st.model, sys, apiMsgs, 1500);
-      const res = await fetch(req.url, { method: "POST", headers: req.h, body: JSON.stringify(req.b) });
-      if (!res.ok) { const e = await res.text(); throw new Error(`${res.status}: ${e.slice(0, 120)}`); }
-
-      const data = await res.json();
-      const parsed = prov.parse(data);
-
-      // Streaming simulation
-      const chars = parsed.text.split("");
-      let buf = "";
-      const ch = Math.max(3, Math.floor(chars.length / 35));
-      for (let i = 0; i < chars.length; i += ch) {
-        buf += chars.slice(i, i + ch).join("");
-        setStreamText(buf);
-        await sleep(14);
-      }
-      setStreamText("");
-      setMessages(prev => [...prev, { id: gid(), role: "assistant", content: parsed.text }]);
-    } catch (e) {
-      setMessages(prev => [...prev, { id: gid(), role: "assistant", content: e.message, error: true }]);
-    } finally {
-      setLoading(false);
-    }
+  const llmCall = async (msgs, maxTok) => {
+    const prov = PROVIDERS[st.provider];
+    const req = prov.build(st.keys[st.provider], st.model, PLANNER_SYS, msgs, maxTok);
+    const res = await fetch(req.url, { method: "POST", headers: req.h, body: JSON.stringify(req.b) });
+    if (!res.ok) { const e = await res.text(); throw new Error(`${res.status}: ${e.slice(0, 120)}`); }
+    const data = await res.json();
+    return prov.parse(data);
   };
 
-  const hasMessages = messages.length > 0 || loading;
-  const canSend = !!input.trim() && !loading && !!st.keys[st.provider];
+  const streamOut = async (text, setter) => {
+    const chars = text.split("");
+    let buf = "";
+    const ch = Math.max(3, Math.floor(chars.length / 40));
+    for (let i = 0; i < chars.length; i += ch) {
+      buf += chars.slice(i, i + ch).join("");
+      setter(buf);
+      await sleep(13);
+    }
+    setter("");
+  };
+
+  const askQuestions = async () => {
+    if (!planTask.trim() || !st.keys[st.provider]) return;
+    setLoading(true);
+    setPhase("questioning");
+    try {
+      const parsed = await llmCall([{ role: "user", content: `Proje: ${planTask}\n\nBu projeyi planlamak için kritik sorularını sor.` }], 500);
+      await streamOut(parsed.text, setStreamText);
+      setQuestions(parsed.text);
+      setPhase("answering");
+    } catch (e) {
+      setQuestions(`Hata: ${e.message}`);
+      setPhase("answering");
+    } finally { setLoading(false); }
+  };
+
+  const generatePlan = async () => {
+    if (!answers.trim() || !st.keys[st.provider]) return;
+    setLoading(true);
+    setPhase("planning");
+    try {
+      const msgs = [
+        { role: "user", content: `Proje: ${planTask}\n\nKritik sorularını sor.` },
+        { role: "assistant", content: questions },
+        { role: "user", content: `Cevaplarım:\n${answers}\n\nŞimdi JSON planı çıkar. SADECE JSON, açıklama ekleme.` },
+      ];
+      const parsed = await llmCall(msgs, 2000);
+      await streamOut(parsed.text, setStreamText);
+      const raw = parsed.text.replace(/```json\n?|\n?```/g, "").trim();
+      try {
+        setPlan(JSON.parse(raw));
+      } catch {
+        setPlan({ title: "Proje Planı", summary: parsed.text, techStack: {}, phases: [], risks: [], estimatedTime: "" });
+      }
+      setPhase("done");
+    } catch (e) {
+      setQuestions(q => q + `\n\nPlan hatası: ${e.message}`);
+      setPhase("answering");
+    } finally { setLoading(false); }
+  };
+
+  const reset = () => { setPhase("idle"); setPlanTask(""); setQuestions(""); setAnswers(""); setPlan(null); setStreamText(""); };
+
+  const PlanCard = ({ title, children, accent }) => (
+    <div style={{ background: T.s, borderRadius: T.r, border: `1px solid ${accent || T.bd}22`, padding: "10px 13px", marginBottom: 8 }}>
+      <div style={{ fontSize: 9, fontWeight: 700, color: accent || T.txM, letterSpacing: 1, marginBottom: 8 }}>{title}</div>
+      {children}
+    </div>
+  );
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", minHeight: "calc(100vh - 148px)", animation: "slideUp .2s ease-out" }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 12, animation: "slideUp .2s ease-out" }}>
 
-      {/* ── Welcome / Empty state ── */}
-      {!hasMessages && (
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "24px 0 16px", gap: 24 }}>
-          <div style={{ textAlign: "center" }}>
-            <div style={{ fontSize: 36, marginBottom: 10 }}>\u26A1</div>
-            <div style={{ fontSize: 22, fontWeight: 800, color: T.tx, fontFamily: T.fd, marginBottom: 6 }}>Beyin Fırtınası</div>
-            <div style={{ fontSize: 12, color: T.txM, lineHeight: 1.6 }}>
-              {!st.keys[st.provider]
-                ? "Başlamak için ayarlardan API key girin."
-                : "Fikirlerini geliştirmek için ne düşünüyorsun?"}
-            </div>
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, width: "100%" }}>
-            {CHAT_STARTERS.map(s => (
-              <button key={s.label} className="chat-starter" onClick={() => { setInput(s.prompt); inputRef.current?.focus(); }} style={{
-                padding: "12px 12px", background: T.s, border: `1px solid ${T.bd}`,
-                borderRadius: T.r, cursor: "pointer", textAlign: "left",
-                transition: "all 0.15s", fontFamily: T.fn,
-              }}>
-                <div style={{ fontSize: 18, marginBottom: 5, color: T.ac }}>{s.icon}</div>
-                <div style={{ fontSize: 11, fontWeight: 600, color: T.tx }}>{s.label}</div>
-                <div style={{ fontSize: 9, color: T.txM, marginTop: 2, lineHeight: 1.4 }}>{s.prompt.slice(0, 28)}…</div>
-              </button>
-            ))}
-          </div>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ width: 38, height: 38, borderRadius: "50%", background: `${PLANNER_COLOR}15`, border: `1px solid ${PLANNER_COLOR}44`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, color: PLANNER_COLOR, flexShrink: 0 }}>◈</div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 15, fontWeight: 800, color: T.tx, fontFamily: T.fd }}>Proje Planlayıcı</div>
+          <div style={{ fontSize: 10, color: T.txM }}>Pipeline başlamadan önce planı oluştur ve onayla</div>
         </div>
-      )}
-
-      {/* ── Message list ── */}
-      {hasMessages && (
-        <div style={{ flex: 1, paddingTop: 8, paddingBottom: 8, display: "flex", flexDirection: "column", gap: 10 }}>
-          {messages.map(m => (
-            <div key={m.id} style={{ display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start", alignItems: "flex-end", gap: 8 }}>
-              {m.role === "assistant" && (
-                <div style={{
-                  width: 28, height: 28, borderRadius: "50%", flexShrink: 0,
-                  background: `${T.ac}15`, border: `1px solid ${T.ac}33`,
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  fontSize: 13, color: T.ac,
-                }}>\u26A1</div>
-              )}
-              <div style={{
-                maxWidth: "78%", padding: "10px 14px",
-                borderRadius: m.role === "user" ? "18px 18px 4px 18px" : "18px 18px 18px 4px",
-                background: m.role === "user" ? `${T.ac}15` : T.s,
-                border: `1px solid ${m.role === "user" ? T.ac + "30" : T.bd}`,
-                fontSize: 12, color: m.error ? T.dn : T.tx, lineHeight: 1.7,
-                whiteSpace: "pre-wrap", wordBreak: "break-word",
-              }}>
-                {m.content}
-              </div>
-              {m.role === "user" && (
-                <div style={{
-                  width: 28, height: 28, borderRadius: "50%", flexShrink: 0,
-                  background: T.s2, border: `1px solid ${T.bd}`,
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  fontSize: 11, color: T.txM,
-                }}>\u25A4</div>
-              )}
-            </div>
-          ))}
-
-          {/* Streaming bubble */}
-          {loading && (
-            <div style={{ display: "flex", justifyContent: "flex-start", alignItems: "flex-end", gap: 8 }}>
-              <div style={{
-                width: 28, height: 28, borderRadius: "50%", flexShrink: 0,
-                background: `${T.ac}15`, border: `1px solid ${T.ac}33`,
-                display: "flex", alignItems: "center", justifyContent: "center",
-                fontSize: 13, color: T.ac,
-              }}>\u26A1</div>
-              <div style={{
-                maxWidth: "78%", padding: "10px 14px",
-                borderRadius: "18px 18px 18px 4px",
-                background: T.s, border: `1px solid ${T.bd}`,
-                fontSize: 12, color: T.tx, lineHeight: 1.7,
-                whiteSpace: "pre-wrap", wordBreak: "break-word", minWidth: 48,
-              }}>
-                {streamText || <span style={{ color: T.txD }}>···</span>}
-                <span style={{
-                  display: "inline-block", width: 7, height: 13, marginLeft: 2,
-                  background: T.ac, animation: "blink 1s step-end infinite", verticalAlign: "middle", borderRadius: 2,
-                }} />
-              </div>
-            </div>
-          )}
-          <div ref={bottomRef} />
-        </div>
-      )}
-
-      {/* ── Quick-action chips (shown during conversation) ── */}
-      {hasMessages && !loading && (
-        <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 10, paddingTop: 2 }}>
-          {CHAT_STARTERS.slice(0, 5).map(s => (
-            <button key={s.label} className="chat-chip" onClick={() => { setInput(s.prompt); inputRef.current?.focus(); }} style={{
-              padding: "5px 11px", background: T.s, border: `1px solid ${T.bd}`,
-              borderRadius: 20, cursor: "pointer", whiteSpace: "nowrap",
-              fontSize: 10, color: T.txM, fontFamily: T.fn, flexShrink: 0,
-              transition: "all 0.15s",
-            }}>{s.icon} {s.label}</button>
-          ))}
-        </div>
-      )}
-
-      {/* ── Input bar ── */}
-      <div style={{ display: "flex", gap: 8, alignItems: "flex-end", borderTop: `1px solid ${T.bd}`, paddingTop: 10 }}>
-        <textarea
-          ref={inputRef}
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          onKeyDown={e => {
-            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(input); }
-          }}
-          onInput={e => {
-            e.target.style.height = "auto";
-            e.target.style.height = Math.min(e.target.scrollHeight, 110) + "px";
-          }}
-          placeholder={!st.keys[st.provider] ? "Önce ayarlardan API key girin..." : "Bir şey yaz... (Enter ile gönder, Shift+Enter yeni satır)"}
-          disabled={loading || !st.keys[st.provider]}
-          rows={1}
-          aria-label="Chat message input"
-          style={{
-            flex: 1, background: T.s, border: `1px solid ${T.bd}`, borderRadius: 20,
-            color: T.tx, padding: "10px 14px", fontSize: 12, resize: "none", outline: "none",
-            lineHeight: 1.5, transition: "border-color 0.2s", fontFamily: T.fn,
-            maxHeight: 110, overflowY: "auto",
-          }}
-          onFocus={e => e.target.style.borderColor = T.ac}
-          onBlur={e => e.target.style.borderColor = T.bd}
-        />
-        <button
-          onClick={() => sendMessage(input)}
-          disabled={!canSend}
-          aria-label="Send"
-          style={{
-            width: 42, height: 42, borderRadius: "50%", flexShrink: 0, border: "none",
-            background: canSend ? `linear-gradient(135deg, ${T.ac}, #059669)` : T.s2,
-            cursor: canSend ? "pointer" : "not-allowed",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            fontSize: 18, transition: "all 0.2s",
-          }}
-        >
-          <span style={{ color: canSend ? T.bg : T.txD, lineHeight: 1 }}>\u2191</span>
-        </button>
+        {phase !== "idle" && (
+          <button onClick={reset} className="pill-btn" style={{ padding: "4px 12px", background: T.s, border: `1px solid ${T.bd}`, borderRadius: 20, fontSize: 10, color: T.txM, cursor: "pointer", fontFamily: T.fn }}>Sıfırla</button>
+        )}
       </div>
 
-      {/* Clear chat */}
-      {hasMessages && !loading && (
-        <button onClick={() => setMessages([])} style={{
-          marginTop: 8, background: "none", border: "none", color: T.txD,
-          fontSize: 10, cursor: "pointer", fontFamily: T.fn, padding: "4px 0",
-          transition: "color 0.15s",
-        }}>
-          Sohbeti temizle
-        </button>
+      {/* ── idle: task input ── */}
+      {phase === "idle" && (
+        <>
+          <textarea value={planTask} onChange={e => setPlanTask(e.target.value)}
+            placeholder="Ne inşa etmek istiyorsun? Projeyi kısaca açıkla... (Ctrl+Enter)"
+            rows={4}
+            onKeyDown={e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) askQuestions(); }}
+            style={{ width: "100%", background: T.s, border: `1px solid ${T.bd}`, borderRadius: T.r, color: T.tx, padding: 12, fontSize: 13, resize: "vertical", outline: "none", lineHeight: 1.55, transition: "border-color 0.2s", fontFamily: T.fn, minHeight: 96 }}
+            onFocus={e => e.target.style.borderColor = PLANNER_COLOR}
+            onBlur={e => e.target.style.borderColor = T.bd}
+          />
+          <button onClick={askQuestions} disabled={!planTask.trim() || !st.keys[st.provider]} style={{
+            padding: "13px 0", borderRadius: T.rs, border: "none",
+            background: (!planTask.trim() || !st.keys[st.provider]) ? T.s2 : `linear-gradient(135deg, ${PLANNER_COLOR}, #8B5CF6)`,
+            color: (!planTask.trim() || !st.keys[st.provider]) ? T.txD : "#fff",
+            fontSize: 12, fontWeight: 700, cursor: (!planTask.trim() || !st.keys[st.provider]) ? "not-allowed" : "pointer",
+            fontFamily: T.fn, letterSpacing: 1.5, transition: "all 0.2s",
+          }}>
+            {!st.keys[st.provider] ? "AYARLARDAN API KEY GİRİN" : "SORULARI GETIR →"}
+          </button>
+        </>
       )}
+
+      {/* ── questioning: stream questions ── */}
+      {phase === "questioning" && (
+        <div style={{ padding: "14px", background: T.s, borderRadius: T.r, border: `1px solid ${PLANNER_COLOR}33` }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+            <div style={{ width: 24, height: 24, borderRadius: "50%", background: `${PLANNER_COLOR}15`, border: `1px solid ${PLANNER_COLOR}44`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: PLANNER_COLOR }}>◈</div>
+            <span style={{ fontSize: 10, color: PLANNER_COLOR, fontWeight: 700 }}>PLANNER</span>
+          </div>
+          <div style={{ fontSize: 11, color: T.tx, lineHeight: 1.75, whiteSpace: "pre-wrap" }}>
+            {streamText || <span style={{ color: T.txD }}>···</span>}
+            <span style={{ display: "inline-block", width: 6, height: 12, marginLeft: 2, background: PLANNER_COLOR, animation: "blink 1s step-end infinite", verticalAlign: "middle", borderRadius: 2 }} />
+          </div>
+        </div>
+      )}
+
+      {/* ── answering: questions + answer input ── */}
+      {phase === "answering" && (
+        <>
+          <div style={{ padding: "12px 14px", background: T.s, borderRadius: T.r, border: `1px solid ${PLANNER_COLOR}33` }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+              <div style={{ width: 24, height: 24, borderRadius: "50%", background: `${PLANNER_COLOR}15`, border: `1px solid ${PLANNER_COLOR}44`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: PLANNER_COLOR }}>◈</div>
+              <span style={{ fontSize: 10, color: PLANNER_COLOR, fontWeight: 700 }}>PLANNER</span>
+            </div>
+            <div style={{ fontSize: 11, color: T.tx, lineHeight: 1.75, whiteSpace: "pre-wrap" }}>{questions}</div>
+          </div>
+          <div style={{ padding: "8px 10px", background: `${PLANNER_COLOR}06`, borderRadius: T.rs, border: `1px solid ${PLANNER_COLOR}18`, fontSize: 10, color: T.txM }}>
+            Proje: <b style={{ color: T.tx }}>{planTask}</b>
+          </div>
+          <textarea value={answers} onChange={e => setAnswers(e.target.value)}
+            placeholder="Soruları yanıtla... Her cevabı numaralandırabilirsin."
+            rows={5}
+            style={{ width: "100%", background: T.s, border: `1px solid ${T.bd}`, borderRadius: T.r, color: T.tx, padding: 12, fontSize: 12, resize: "vertical", outline: "none", lineHeight: 1.6, transition: "border-color 0.2s", fontFamily: T.fn, minHeight: 100 }}
+            onFocus={e => e.target.style.borderColor = PLANNER_COLOR}
+            onBlur={e => e.target.style.borderColor = T.bd}
+          />
+          <button onClick={generatePlan} disabled={!answers.trim() || loading} style={{
+            padding: "13px 0", borderRadius: T.rs, border: "none",
+            background: (!answers.trim() || loading) ? T.s2 : `linear-gradient(135deg, ${PLANNER_COLOR}, #8B5CF6)`,
+            color: (!answers.trim() || loading) ? T.txD : "#fff",
+            fontSize: 12, fontWeight: 700, cursor: (!answers.trim() || loading) ? "not-allowed" : "pointer",
+            fontFamily: T.fn, letterSpacing: 1.5, transition: "all 0.2s",
+          }}>PLAN OLUŞTUR →</button>
+        </>
+      )}
+
+      {/* ── planning: streaming JSON ── */}
+      {phase === "planning" && (
+        <div style={{ padding: "14px", background: T.s, borderRadius: T.r, border: `1px solid ${PLANNER_COLOR}33` }}>
+          <div style={{ fontSize: 10, color: PLANNER_COLOR, fontWeight: 700, marginBottom: 8 }}>◈ PLAN OLUŞTURULUYOR…</div>
+          <div style={{ fontSize: 10, color: T.txM, lineHeight: 1.7, whiteSpace: "pre-wrap", fontFamily: T.fn }}>
+            {streamText || <span style={{ color: T.txD }}>···</span>}
+            <span style={{ display: "inline-block", width: 6, height: 12, marginLeft: 2, background: PLANNER_COLOR, animation: "blink 1s step-end infinite", verticalAlign: "middle", borderRadius: 2 }} />
+          </div>
+        </div>
+      )}
+
+      {/* ── done: rendered plan ── */}
+      {phase === "done" && plan && (
+        <>
+          {/* Title + summary */}
+          <div style={{ padding: "14px 16px", background: `${PLANNER_COLOR}0A`, borderRadius: T.r, border: `1px solid ${PLANNER_COLOR}33` }}>
+            <div style={{ fontSize: 17, fontWeight: 800, color: T.tx, fontFamily: T.fd, marginBottom: 5 }}>{plan.title || "Proje Planı"}</div>
+            <div style={{ fontSize: 11, color: T.txM, lineHeight: 1.65 }}>{plan.summary}</div>
+            {plan.estimatedTime && <div style={{ marginTop: 7, fontSize: 10, color: PLANNER_COLOR, fontWeight: 600 }}>⏱ {plan.estimatedTime}</div>}
+          </div>
+
+          {/* Tech stack */}
+          {plan.techStack && Object.values(plan.techStack).some(Boolean) && (
+            <PlanCard title="TECH STACK" accent={PLANNER_COLOR}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {Object.entries(plan.techStack).map(([k, v]) => v ? (
+                  <div key={k} style={{ padding: "4px 10px", background: `${PLANNER_COLOR}0A`, border: `1px solid ${PLANNER_COLOR}22`, borderRadius: 20, fontSize: 10 }}>
+                    <span style={{ color: T.txM, textTransform: "capitalize" }}>{k}: </span>
+                    <b style={{ color: T.tx }}>{v}</b>
+                  </div>
+                ) : null)}
+              </div>
+            </PlanCard>
+          )}
+
+          {/* Phases */}
+          {plan.phases?.length > 0 && (
+            <PlanCard title="FAZLAR" accent={T.inf}>
+              {plan.phases.map((ph, i) => (
+                <div key={i} style={{ marginBottom: i < plan.phases.length - 1 ? 12 : 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
+                    <div style={{ width: 20, height: 20, borderRadius: "50%", background: PLANNER_COLOR, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, color: "#000", fontWeight: 700, flexShrink: 0 }}>{i + 1}</div>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: T.tx }}>{ph.name}</span>
+                    {ph.duration && <span style={{ fontSize: 9, color: T.txM, marginLeft: "auto" }}>{ph.duration}</span>}
+                  </div>
+                  <div style={{ paddingLeft: 28, display: "flex", flexDirection: "column", gap: 3 }}>
+                    {(ph.tasks || []).map((t, ti) => (
+                      <div key={ti} style={{ fontSize: 10, color: T.txM, display: "flex", gap: 6 }}><span style={{ color: PLANNER_COLOR }}>·</span>{t}</div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </PlanCard>
+          )}
+
+          {/* Risks */}
+          {plan.risks?.length > 0 && (
+            <PlanCard title="RİSKLER" accent={T.wn}>
+              {plan.risks.map((r, i) => (
+                <div key={i} style={{ marginBottom: i < plan.risks.length - 1 ? 8 : 0 }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: T.wn }}>⚠ {r.risk}</div>
+                  {r.mitigation && <div style={{ fontSize: 10, color: T.txM, marginTop: 2, paddingLeft: 14 }}>→ {r.mitigation}</div>}
+                </div>
+              ))}
+            </PlanCard>
+          )}
+
+          <button onClick={() => onRunWithPlan(planTask)} style={{
+            padding: "14px 0", borderRadius: T.rs, border: "none",
+            background: `linear-gradient(135deg, ${T.ac}, #059669)`,
+            color: T.bg, fontSize: 12, fontWeight: 700, cursor: "pointer",
+            fontFamily: T.fn, letterSpacing: 2, transition: "all 0.2s",
+          }}>▶ PİPELİNE BAŞLA</button>
+        </>
+      )}
+      <div ref={bottomRef} />
     </div>
   );
 }
@@ -956,28 +1146,29 @@ export default function AgentOS() {
   const closeAgent = useCallback(() => { setSelectedAgent(null); setView("pipeline"); }, []);
   const cancelPipeline = useCallback(() => { cancelRef.current = true; }, []);
 
-  const runPipeline = useCallback(async () => {
-    if (!task.trim() || !st.keys[st.provider]) return;
+
+  const runPipeline = useCallback(async (taskOverride) => {
+    const activeTask = (typeof taskOverride === "string" && taskOverride.trim()) ? taskOverride : task;
+    if (!activeTask.trim() || !st.keys[st.provider]) return;
+    if (typeof taskOverride === "string" && taskOverride.trim()) setTask(taskOverride);
     cancelRef.current = false;
     dispatch({ t: "RST" });
     dispatch({ t: "ST", v: "running" });
-    // Mark all agents as queued before starting
     AGENTS_FULL.forEach(a => dispatch({ t: "AG", id: a.id, d: { status: "queued" } }));
 
     let prevOutput = "";
     for (const agent of AGENTS_FULL) {
       if (cancelRef.current) {
         dispatch({ t: "ST", v: "idle" });
-        dispatch({ t: "LOG", from: agent.id, lt: "warn", text: "Pipeline cancelled by user." });
+        dispatch({ t: "LOG", from: "system", lt: "warn", text: "Pipeline durduruldu." });
         break;
       }
       dispatch({ t: "AG", id: agent.id, d: { status: "running", error: null } });
       dispatch({ t: "LOG", from: agent.id, lt: "info", text: "Starting..." });
       try {
-        const input = `Task: ${task}\n\nPrevious agent output:\n${prevOutput.slice(0, 600) || "(first in pipeline)"}\n\nYour role: ${agent.role}. Execute.`;
+        const input = `Task: ${activeTask}\n\nPrevious agent output:\n${prevOutput.slice(0, 800) || "(first in pipeline)"}\n\nYour role: ${agent.role}. Execute.`;
         const r = await callLLM(st, dispatch, agent.id, agent.sys, input, agent.maxTok);
         dispatch({ t: "AG", id: agent.id, d: { status: "done", tokens: r.tok, elapsed: r.ms, cost: r.cost, output: r.text } });
-
         const next = AGENTS_FULL[AGENTS_FULL.indexOf(agent) + 1];
         if (next) dispatch({ t: "BUS", from: agent.id, to: next.id, text: r.text.length > 80 ? r.text.slice(0, 80) + "…" : r.text });
         prevOutput = r.text;
@@ -990,15 +1181,16 @@ export default function AgentOS() {
     }
     dispatch({ t: "ST", v: "done" });
     dispatch({ t: "LOG", from: "system", lt: "success", text: `Pipeline complete — ${AGENTS_FULL.length} agents ran` });
-  };
+  }, [task, st]); // eslint-disable-line
 
   const nav = [
-    { id: "pipeline", label: "Pipeline", icon: "\u25C8" },
-    { id: "chat", label: "Chat", icon: "\u26A1" },
-    { id: "logs", label: "Logs", icon: "\u25CE" },
-    { id: "metrics", label: "Stats", icon: "\u25C9" },
-    { id: "settings", label: "Settings", icon: "\u2699" },
+    { id: "pipeline", label: "Pipeline", icon: "◈" },
+    { id: "plan",     label: "Plan",     icon: "◊" },
+    { id: "logs",     label: "Logs",     icon: "◎" },
+    { id: "metrics",  label: "Stats",    icon: "◉" },
+    { id: "settings", label: "Settings", icon: "⚙" },
   ];
+
 
   return (
     <div style={{ minHeight: "100vh", background: T.bg, color: T.tx, fontFamily: T.fn, paddingBottom: 64, WebkitFontSmoothing: "antialiased" }}>
@@ -1021,8 +1213,9 @@ export default function AgentOS() {
         textarea:disabled { opacity: 0.5; cursor: not-allowed; }
         button:focus-visible { outline: 2px solid ${T.ac}; outline-offset: 2px; }
         input:focus-visible { outline: 2px solid ${T.ac}; outline-offset: 1px; }
-        .chat-starter:hover { border-color: ${T.ac}55 !important; background: ${T.s2} !important; }
+        .chat-starter:hover { border-color: ${PLANNER_COLOR}55 !important; background: ${T.s2} !important; }
         .chat-chip:hover { border-color: ${T.ac}44 !important; color: ${T.tx} !important; }
+        .pill-btn:hover { opacity: 0.85; border-color: rgba(255,255,255,0.2) !important; }
       `}</style>
 
       {/* ══ HEADER ══ */}
@@ -1062,17 +1255,15 @@ export default function AgentOS() {
 
       {/* ══ CONTENT ══ */}
       <div style={{ padding: "12px 14px 80px" }}>
-        {/* Task input — pipeline view only */}
+        {/* Task input + controls — pipeline view only */}
         {view === "pipeline" && (
           <div style={{ marginBottom: 12 }}>
             <textarea
               value={task} onChange={e => setTask(e.target.value)}
-              placeholder="Describe what to build... (Ctrl+Enter to run)"
+              placeholder="Ne inşa etmek istiyorsun? (Ctrl+Enter ile çalıştır, ya da Plan sekmesinden planla)"
               rows={3} disabled={st.status === "running"}
               aria-label="Task description"
-              onKeyDown={e => {
-                if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); runPipeline(); }
-              }}
+              onKeyDown={e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); runPipeline(); } }}
               style={{
                 width: "100%", background: T.s, border: `1px solid ${T.bd}`, borderRadius: T.r,
                 color: T.tx, padding: 12, fontSize: 13, resize: "vertical", outline: "none",
@@ -1081,27 +1272,29 @@ export default function AgentOS() {
               onFocus={e => e.target.style.borderColor = T.ac}
               onBlur={e => e.target.style.borderColor = T.bd}
             />
-            <button
-              onClick={runPipeline}
-              disabled={st.status === "running" || !task.trim() || !st.keys[st.provider]}
-              aria-label={st.status === "running" ? "Pipeline is running" : !st.keys[st.provider] ? "Set an API key in settings first" : !task.trim() ? "Enter a task description first" : "Run the agent pipeline"}
-              style={{
-                width: "100%", marginTop: 8, padding: "12px 0",
-                background: (st.status === "running" || !task.trim() || !st.keys[st.provider]) ? T.s2 : `linear-gradient(135deg, ${T.ac}, #059669)`,
-                color: (st.status === "running" || !task.trim() || !st.keys[st.provider]) ? T.txD : T.bg,
-                border: "none", borderRadius: T.rs, fontSize: 12, fontWeight: 700,
-                cursor: (st.status === "running" || !task.trim() || !st.keys[st.provider]) ? "not-allowed" : "pointer", letterSpacing: 2,
-                transition: "all 0.2s",
-              }}
-            >
-              {st.status === "running"
-                ? "RUNNING PIPELINE..."
-                : !st.keys[st.provider]
-                  ? "SET API KEY IN SETTINGS"
-                  : !task.trim()
-                    ? "ENTER A TASK ABOVE"
-                    : "RUN PIPELINE"}
-            </button>
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <button
+                onClick={runPipeline}
+                disabled={st.status === "running" || !task.trim() || !st.keys[st.provider]}
+                style={{
+                  flex: 1, padding: "12px 0",
+                  background: (st.status === "running" || !task.trim() || !st.keys[st.provider]) ? T.s2 : `linear-gradient(135deg, ${T.ac}, #059669)`,
+                  color: (st.status === "running" || !task.trim() || !st.keys[st.provider]) ? T.txD : T.bg,
+                  border: "none", borderRadius: T.rs, fontSize: 12, fontWeight: 700,
+                  cursor: (st.status === "running" || !task.trim() || !st.keys[st.provider]) ? "not-allowed" : "pointer", letterSpacing: 2,
+                  transition: "all 0.2s",
+                }}
+              >
+                {st.status === "running" ? "ÇALIŞIYOR..." : !st.keys[st.provider] ? "API KEY GİR" : !task.trim() ? "GÖREV GİR" : "▶ PIPELINE BAŞLAT"}
+              </button>
+              {st.status === "running" && (
+                <button onClick={cancelPipeline} style={{
+                  padding: "12px 16px", background: `${T.dn}15`, border: `1px solid ${T.dn}44`,
+                  borderRadius: T.rs, fontSize: 11, fontWeight: 700, color: T.dn, cursor: "pointer",
+                  fontFamily: T.fn, transition: "all 0.2s", flexShrink: 0,
+                }}>■ Durdur</button>
+              )}
+            </div>
           </div>
         )}
 
@@ -1193,7 +1386,7 @@ export default function AgentOS() {
         )}
 
         {/* Chat */}
-        {view === "chat" && <ChatView st={st} />}
+        {view === "plan" && <PlannerView st={st} onRunWithPlan={(t) => { setView("pipeline"); runPipeline(t); }} />}
 
         {/* Settings */}
         {view === "settings" && <SettingsView st={st} dispatch={dispatch} />}
